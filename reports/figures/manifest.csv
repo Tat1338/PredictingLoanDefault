@@ -1,0 +1,55 @@
+filename,caption,width_px,height_px,size_kb
+age_distribution.png,Age is broad; median and mode marked.,1067,617,58.9
+age_group_default_counts.png,,1200,600,42.0
+age_group_default_rate.png,Share late by age group (labels include group size).,1141,617,49.8
+age_groups_counts.png,Most clients are between 35–64.,1142,617,43.1
+calibration_logreg.png,Reliability curve — predicted vs observed risk (LogReg).,771,767,57.4
+cm_logreg.png,Confusion matrix — Logistic Regression.,917,779,41.2
+cm_logreg_tuned.png,Confusion at chosen threshold — Logistic Regression.,917,779,41.3
+cm_rf.png,Confusion matrix — Random Forest.,917,779,41.0
+cm_rf_tuned.png,Confusion at chosen threshold — Random Forest.,917,779,40.1
+correlation_heatmap.png,Correlation heatmap (numeric features).,1203,1067,132.8
+correlation_heatmap_clustered.png,,1327,1381,130.7
+correlation_heatmap_high_contrast.png,,1350,1050,131.4
+correlation_top_pairs.png,,1350,750,106.5
+debtratio.png,,900,600,33.8
+debtratio_log.png,Log scale reveals a long right tail of extreme ratios.,1067,617,31.8
+debtratio_risk_bins.png,DebtRatio bins: clients and serious-late rate.,1292,647,75.3
+debtratio_zoom.png,Debt-to-income peaks below 100%; 100% & 200% lines shown (0–200%).,1067,617,64.6
+default_counts.png,,900,600,37.6
+dependents_counts.png,,900,600,39.0
+dependents_default_counts.png,Counts by dependents with % late on red bars.,1337,737,58.6
+dependents_default_rate.png,Share late by dependents (labels include clients).,1067,617,38.4
+gains_logreg.png,Cumulative gains — Logistic Regression.,947,647,59.4
+gains_rf.png,Cumulative gains — Random Forest.,947,647,57.6
+income_distribution.png,,800,500,18.7
+lift_logreg.png,Lift vs baseline — Logistic Regression.,947,647,43.2
+lift_rf.png,Lift vs baseline — Random Forest.,947,647,38.3
+monthly_income.png,,900,600,30.9
+monthly_income_by_default.png,,900,600,38.0
+monthly_income_by_default_box.png,Median income slightly lower among late payers (0–40k view).,1067,617,43.2
+monthly_income_deciles.png,Income deciles: clients (bars) & late rate (line).,1367,617,95.9
+monthly_income_distribution.png,,800,500,22.3
+monthly_income_ecdf.png,ECDF: share of clients earning ≤ X (median/P90/P99 marked).,1067,617,48.9
+monthly_income_focus.png,"Income distribution (log scale, 1–99th pct) with mean/median.",1067,617,40.9
+monthly_income_line.png,,800,500,32.4
+monthly_income_log_distribution.png,,800,500,20.1
+mortgage_counts.png,How many clients with vs without mortgages.,917,617,32.6
+mortgage_default_rate.png,Share late by mortgage status (labels include clients).,977,617,41.0
+mortgage_owners_breakdown.png,"Among mortgage owners, split of late vs no late.",917,617,37.8
+mortgage_owners_with_default.png,,900,600,31.2
+pi_logreg.png,Permutation importance — top drivers (LogReg).,1217,767,69.6
+pi_rf.png,Permutation importance — top drivers (RF).,1217,767,69.8
+pr_logreg.png,Precision–Recall — Logistic Regression.,917,767,38.8
+pr_rf.png,Precision–Recall — Random Forest.,917,767,37.7
+real_estate_default_rate.png,,900,600,38.8
+real_estate_loan_counts.png,,900,600,32.2
+revolving_utilization.png,,900,600,38.0
+revolving_utilization_log.png,Log view shows rare very-high utilization.,1067,617,30.4
+revolving_utilization_zoom.png,Credit utilization mostly under 100%; 99th pct marked.,1067,617,62.7
+roc_logreg.png,ROC — Logistic Regression; diagonal is random.,917,767,57.6
+roc_rf.png,ROC — Random Forest; diagonal is random.,917,767,55.3
+serious_late_payment_counts.png,Class balance: ~6–7% became 90+ days late within 2 years.,947,617,40.3
+thr_tuning_logistic_regression.png,Precision/Recall/F-scores & cost vs threshold (LogReg).,1067,617,84.5
+thr_tuning_random_forest.png,Precision/Recall/F-scores & cost vs threshold (RF).,1067,617,92.7
+utilization_risk_bins.png,Utilization bins: clients and serious-late rate.,1292,647,74.4

@@ -1,0 +1,28 @@
+# --- Python bytecode & build ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+
+# --- Environments & IDE ---
+.venv/
+venv/
+.env
+.idea/
+.vscode/
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+
+# --- Artifacts / caches ---
+artifacts/
+exports/
+*.joblib
+*.pkl
+.streamlit/
+
+# --- Logs and aux text we can regenerate ---
+reports/run_environment.txt
+reports/requirements_min.txt

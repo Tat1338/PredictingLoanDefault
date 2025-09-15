@@ -1,0 +1,40 @@
+=== Figure Captions (short, ready for the report) ===
+serious_late_payment_counts.png: Class balance: ~6–7% became 90+ days late within 2 years.
+age_distribution.png: Age is broad; median and mode marked.
+age_groups_counts.png: Most clients are between 35–64.
+age_group_default_rate.png: Share late by age group (labels include group size).
+monthly_income_focus.png: Income distribution (log scale, 1–99th pct) with mean/median.
+monthly_income_ecdf.png: ECDF: share of clients earning ≤ X (median/P90/P99 marked).
+monthly_income_deciles.png: Income deciles: clients (bars) & late rate (line).
+monthly_income_by_default_box.png: Median income slightly lower among late payers (0–40k view).
+debtratio_zoom.png: Debt-to-income peaks below 100%; 100% & 200% lines shown (0–200%).
+debtratio_log.png: Log scale reveals a long right tail of extreme ratios.
+dependents_default_counts.png: Counts by dependents with % late on red bars.
+dependents_default_rate.png: Share late by dependents (labels include clients).
+mortgage_counts.png: How many clients with vs without mortgages.
+mortgage_default_rate.png: Share late by mortgage status (labels include clients).
+mortgage_owners_breakdown.png: Among mortgage owners, split of late vs no late.
+revolving_utilization_zoom.png: Credit utilization mostly under 100%; 99th pct marked.
+revolving_utilization_log.png: Log view shows rare very-high utilization.
+correlation_heatmap.png: Correlation heatmap (numeric features).
+gains_logreg.png: Cumulative gains — Logistic Regression.
+gains_rf.png: Cumulative gains — Random Forest.
+lift_logreg.png: Lift vs baseline — Logistic Regression.
+lift_rf.png: Lift vs baseline — Random Forest.
+debtratio_risk_bins.png: DebtRatio bins: clients and serious-late rate.
+utilization_risk_bins.png: Utilization bins: clients and serious-late rate.
+cm_logreg.png: Confusion matrix — Logistic Regression.
+cm_rf.png: Confusion matrix — Random Forest.
+roc_logreg.png: ROC — Logistic Regression; diagonal is random.
+roc_rf.png: ROC — Random Forest; diagonal is random.
+pr_logreg.png: Precision–Recall — Logistic Regression.
+pr_rf.png: Precision–Recall — Random Forest.
+cm_logreg_tuned.png: Confusion at chosen threshold — Logistic Regression.
+cm_rf_tuned.png: Confusion at chosen threshold — Random Forest.
+pi_logreg.png: Permutation importance — top drivers (LogReg).
+pi_rf.png: Permutation importance — top drivers (RF).
+thr_tuning_logistic_regression.png: Precision/Recall/F-scores & cost vs threshold (LogReg).
+thr_tuning_random_forest.png: Precision/Recall/F-scores & cost vs threshold (RF).
+calibration_logreg.png: Reliability curve — predicted vs observed risk (LogReg).
+fairness_logreg_tuned_tpr.png: TPR by group — Logistic Regression (tuned threshold).
+fairness_rf_tuned_tpr.png: TPR by group — Random Forest (tuned threshold).

@@ -1,0 +1,4 @@
+feature_1,feature_2,corr
+NumberOfTime30-59DaysPastDueNotWorse,NumberOfTimes90DaysLate,0.980489274543101
+NumberOfTime30-59DaysPastDueNotWorse,NumberOfTime60-89DaysPastDueNotWorse,0.984535136504351
+NumberOfTimes90DaysLate,NumberOfTime60-89DaysPastDueNotWorse,0.9914092319882746

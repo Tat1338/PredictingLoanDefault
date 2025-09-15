@@ -1,0 +1,10 @@
+=== Data Cleaning Summary ===
+Rows before cleaning       : 150,000
+Rows after cleaning        : 149,390
+Total rows removed         : 610
+Duplicates removed         : 609
+Infinite values found      : 0
+Filled MonthlyIncome (NaN) : 29,221
+Filled Dependents (NaN)    : 3,828
+Non-positive ages removed  : 1
+Missing targets dropped    : 0
