@@ -1,6 +1,8 @@
 # dashboard.py
 # Streamlit dashboard for the Loan Default Exam Project
-# - Uses width="stretch" (no use_container_width warnings)
+# - Clean widths (no use_container_width warnings)
+# - Inline threshold metrics in Score Explorer
+# - Gentle fallbacks + downloads
 
 import os
 import glob
@@ -24,13 +26,23 @@ def safe_read_csv(path: str) -> pd.DataFrame | None:
     except Exception:
         return None
 
-def show_table(df: pd.DataFrame, caption: str | None = None, height: int = 360):
+def show_table(df: pd.DataFrame | None, caption: str | None = None, height: int = 360):
     if df is None or df.empty:
         st.info("No data found for this section.")
         return
-    st.dataframe(df, height=height, use_container_width=False)  # width is controlled by columns
+    st.dataframe(df, height=height, use_column_width=False)  # width is controlled by columns
     if caption:
         st.caption(caption)
+
+def find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    """Return the first existing column from candidates."""
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+def safe_div(n: float, d: float) -> float:
+    return (n / d) if d else np.nan
 
 # ---------- sidebar ----------
 st.sidebar.title("Navigation")
@@ -43,9 +55,12 @@ st.sidebar.divider()
 st.sidebar.markdown("**Files this app expects:**")
 st.sidebar.code(
     "reports/figures/*.png\n"
+    "reports/key_numbers.csv\n"
     "exports/holdout_predictions.csv\n"
     "exports/model_eval_summary.csv\n"
-    "exports/threshold_metrics.csv",
+    "exports/threshold_metrics.csv\n"
+    "exports/score_deciles_logreg.csv\n"
+    "exports/score_deciles_rf.csv",
     language="text"
 )
 
@@ -54,7 +69,6 @@ if page == "Overview":
     st.title("Loan Serious-Late Prediction — Dashboard")
 
     col1, col2, col3 = st.columns(3)
-    # Key numbers (if available)
     key_numbers = safe_read_csv("reports/key_numbers.csv")
     if key_numbers is not None and not key_numbers.empty:
         row = key_numbers.iloc[0].to_dict()
@@ -64,14 +78,12 @@ if page == "Overview":
             rr = row.get("late_rate", np.nan)
             st.metric("Late rate", f"{rr:.1%}" if pd.notna(rr) else "—")
         with col3:
-            st.metric("Median income", f"{row.get('median_income_all', float('nan')):,.0f}")
+            med_inc = row.get("median_income_all", np.nan)
+            st.metric("Median income", f"{med_inc:,.0f}" if pd.notna(med_inc) else "—")
     else:
-        with col1:
-            st.metric("Total clients", "—")
-        with col2:
-            st.metric("Late rate", "—")
-        with col3:
-            st.metric("Median income", "—")
+        with col1: st.metric("Total clients", "—")
+        with col2: st.metric("Late rate", "—")
+        with col3: st.metric("Median income", "—")
 
     st.markdown("### What’s here")
     st.markdown(
@@ -90,7 +102,6 @@ elif page == "EDA Gallery":
         if not images:
             st.info("No figures found yet. Run `python main.py` to generate them.")
         else:
-            # Optional captions file
             captions = {}
             cap_path = os.path.join("reports", "figure_captions.txt")
             if exists(cap_path):
@@ -109,7 +120,8 @@ elif page == "EDA Gallery":
                 st.subheader(fname)
                 if cap:
                     st.caption(cap)
-                st.image(img, caption=None, width=None)  # draws at natural width
+                # ✅ Fixed: responsive, no invalid width
+                st.image(img, use_column_width=True)
                 st.divider()
 
 elif page == "Model Performance":
@@ -120,8 +132,14 @@ elif page == "Model Performance":
     if perf is not None and not perf.empty:
         st.markdown("**Holdout metrics**")
         show_table(perf, height=260)
+        st.download_button(
+            "Download metrics (CSV)",
+            data=perf.to_csv(index=False).encode("utf-8"),
+            file_name="model_eval_summary.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
-        # Small summary KPIs
         c1, c2 = st.columns(2)
         with c1:
             if "AUC" in perf.columns and "model" in perf.columns:
@@ -157,7 +175,8 @@ elif page == "Model Performance":
             path = os.path.join(FIG_DIR, fallback)
         if exists(path):
             st.subheader(title)
-            st.image(path, width=None)
+            # ✅ Fixed: responsive, no invalid width
+            st.image(path, use_column_width=True)
         else:
             st.caption(f"Missing: {preferred if preferred else ''}")
 
@@ -165,31 +184,95 @@ elif page == "Score Explorer":
     st.title("Score Explorer (holdout set)")
 
     holdout = safe_read_csv(os.path.join(EXPORTS_DIR, "holdout_predictions.csv"))
+    thr_metrics = safe_read_csv(os.path.join(EXPORTS_DIR, "threshold_metrics.csv"))
+
     if holdout is None or holdout.empty:
         st.info("Run `python main.py` first to create `exports/holdout_predictions.csv`.")
     else:
         st.markdown("Use the threshold slider to see how many would be flagged.")
-        model_choice = st.selectbox("Model", ["Logistic Regression", "Random Forest"])
-        thr = st.slider("Threshold", min_value=0.0, max_value=1.0, value=0.5, step=0.01)
+        # Detect available proba columns
+        model_map = {}
+        if "proba_logreg" in holdout.columns:
+            model_map["Logistic Regression"] = "proba_logreg"
+        if "proba_rf" in holdout.columns:
+            model_map["Random Forest"] = "proba_rf"
+        # Fallback if custom names:
+        if not model_map:
+            for c in holdout.columns:
+                if c.lower().startswith("proba"):
+                    model_map[c] = c
 
-        prob_col = "proba_logreg" if "logreg" in model_choice.lower() else "proba_rf"
-        if prob_col not in holdout.columns:
-            st.error(f"Column not found: {prob_col}")
+        if not model_map:
+            st.error("No probability columns found (expected e.g. 'proba_logreg', 'proba_rf').")
         else:
-            probs = holdout[prob_col].values
+            model_choice = st.selectbox("Model", list(model_map.keys()))
+            prob_col = model_map[model_choice]
+            thr = st.slider("Threshold", min_value=0.0, max_value=1.0, value=0.5, step=0.01)
+
+            probs = holdout[prob_col].to_numpy()
             flagged = int((probs >= thr).sum())
             total = len(probs)
-            st.metric("Flagged (>= threshold)", f"{flagged:,}", delta=None)
-            st.caption(f"Out of {total:,} holdout cases")
+
+            cA, cB, cC = st.columns(3)
+            with cA:
+                st.metric("Flagged (>= threshold)", f"{flagged:,}")
+                st.caption(f"Out of {total:,} holdout cases")
+            with cB:
+                st.metric("Mean score", f"{np.nanmean(probs):.3f}")
+            with cC:
+                st.metric("Std. dev. score", f"{np.nanstd(probs):.3f}")
 
             # quick histogram
             hist, edges = np.histogram(probs, bins=30, range=(0, 1))
             st.bar_chart(pd.DataFrame({"count": hist}, index=pd.Index(edges[:-1], name="p")), height=240)
 
-            # show a few top-scored rows
+            # Inline metrics if we have y_true
+            y_col = find_column(holdout, ["y_true", "target", "SeriousDlqin2yrs"])
+            if y_col is not None:
+                y = holdout[y_col].astype(int).to_numpy()
+                preds = (probs >= thr).astype(int)
+
+                tp = int(((preds == 1) & (y == 1)).sum())
+                tn = int(((preds == 0) & (y == 0)).sum())
+                fp = int(((preds == 1) & (y == 0)).sum())
+                fn = int(((preds == 0) & (y == 1)).sum())
+
+                precision = safe_div(tp, tp + fp)
+                recall = safe_div(tp, tp + fn)
+                specificity = safe_div(tn, tn + fp)
+                accuracy = safe_div(tp + tn, total)
+                f1 = safe_div(2 * precision * recall, precision + recall)
+
+                st.markdown("#### Threshold metrics (on holdout)")
+                m1, m2, m3, m4, m5 = st.columns(5)
+                m1.metric("Precision", f"{precision:.3f}" if pd.notna(precision) else "—")
+                m2.metric("Recall (TPR)", f"{recall:.3f}" if pd.notna(recall) else "—")
+                m3.metric("Specificity (TNR)", f"{specificity:.3f}" if pd.notna(specificity) else "—")
+                m4.metric("Accuracy", f"{accuracy:.3f}" if pd.notna(accuracy) else "—")
+                m5.metric("F1", f"{f1:.3f}" if pd.notna(f1) else "—")
+
+                st.caption(f"Confusion matrix @ {thr:.2f}: TP={tp:,}, FP={fp:,}, TN={tn:,}, FN={fn:,}")
+
+            # If precomputed threshold_metrics.csv exists, show nearest row for current thr
+            if thr_metrics is not None and not thr_metrics.empty and "threshold" in thr_metrics.columns:
+                nearest = thr_metrics.iloc[(thr_metrics["threshold"] - thr).abs().argsort()[:1]]
+                st.markdown("##### Nearest precomputed row from `threshold_metrics.csv`")
+                show_table(nearest, height=120)
+
+            # Show a few top-scored rows
+            st.markdown("#### Top scores")
             top_n = st.number_input("Show top N scores", min_value=5, max_value=200, value=20, step=5)
             top_df = pd.DataFrame({"probability": probs}).sort_values("probability", ascending=False).head(int(top_n))
             show_table(top_df, caption="Highest-risk holdout predictions", height=300)
+
+            # Download
+            st.download_button(
+                "Download holdout with scores (CSV)",
+                data=holdout.to_csv(index=False).encode("utf-8"),
+                file_name="holdout_predictions.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 
 elif page == "How to run":
     st.title("How to run")
@@ -226,5 +309,14 @@ elif page == "How to run":
             "exports/score_deciles_rf.csv\n",
             language="text"
         )
+
+    st.markdown("**Deploy on Streamlit Community Cloud / GitHub**")
+    st.code(
+        "requirements.txt  # include: streamlit, pandas, numpy, scikit-learn, matplotlib, seaborn (if used)\n"
+        ".streamlit/config.toml  # optional theming\n"
+        "Repo contains: main.py, dashboard.py, /reports, /exports (or code that creates them)\n"
+        "App entry point: dashboard.py\n",
+        language="text"
+    )
 
     st.info("Tip: If you change code, just refresh the Streamlit page or rerun the command.")
