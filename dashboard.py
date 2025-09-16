@@ -1,334 +1,278 @@
 # dashboard.py
-# Streamlit dashboard for Loan Serious-Late Prediction
-# Safe with Streamlit >= 1.49 and Python 3.13
-# - No width=None / use_container_width
-# - Robust guards around file/column issues
-# - Exceptions are shown in the app instead of killing it
+# Streamlit dashboard for the Loan Serious-Late Prediction project
+# Compatible with Streamlit >= 1.49 (uses width='stretch'/'content', never width=None)
+
+from __future__ import annotations
 
 import os
-from os.path import exists, join
 import glob
 import textwrap
+from typing import Dict, Optional
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 
-# --------------------------------------------------------------------------------------
-# Basic setup
-# --------------------------------------------------------------------------------------
-st.set_page_config(
-    page_title="Loan Serious-Late — Dashboard",
-    page_icon="📊",
-    layout="wide",
-)
 
-ROOT = os.getcwd()
-REP_DIR = "reports"
-FIG_DIR = join(REP_DIR, "figures")
-EXP_DIR = "exports"
+# --------------------------- Paths & helpers ---------------------------
 
-KEY_NUMBERS_CSV = join(REP_DIR, "key_numbers.csv")
-MODEL_EVAL_CSV = join(EXP_DIR, "model_eval_summary.csv")
-THRESHOLD_METRICS_CSV = join(EXP_DIR, "threshold_metrics.csv")
-HOLDOUT_PREDICTIONS_CSV = join(EXP_DIR, "holdout_predictions.csv")
-SCORE_DECILES_LOGREG_CSV = join(EXP_DIR, "score_deciles_logreg.csv")
-SCORE_DECILES_RF_CSV = join(EXP_DIR, "score_deciles_rf.csv")
-FIGURE_CAPTIONS_TXT = join(REP_DIR, "figure_captions.txt")
+BASE = os.path.dirname(os.path.abspath(__file__))
+FIG_DIR = os.path.join(BASE, "reports", "figures")
+REPORTS_DIR = os.path.join(BASE, "reports")
+EXPORTS_DIR = os.path.join(BASE, "exports")
 
+EXPECTED_FILES = [
+    "reports/figures/*.png",
+    "reports/key_numbers.csv",
+    "exports/holdout_predictions.csv",
+    "exports/model_eval_summary.csv",
+    "exports/threshold_metrics.csv",
+    "exports/score_deciles_logreg.csv",
+    "exports/score_deciles_rf.csv",
+]
 
-# --------------------------------------------------------------------------------------
-# Helpers (robust / won’t throw)
-# --------------------------------------------------------------------------------------
-def show_image(obj, caption=None, full=False):
-    """Wrapper using the new width API: 'content' or 'stretch' only."""
-    try:
-        st.image(obj, caption=caption, width=("stretch" if full else "content"))
-    except Exception as e:
-        st.warning(f"Could not render image {obj}: {e}")
+def exists(path: str) -> bool:
+    return os.path.exists(path)
 
-def read_csv_safe(path, **kwargs):
+@st.cache_data(show_spinner=False)
+def read_csv_safe(path: str) -> Optional[pd.DataFrame]:
     try:
         if exists(path):
-            return pd.read_csv(path, **kwargs)
+            return pd.read_csv(path)
+    except Exception:
         return None
-    except Exception as e:
-        st.warning(f"Could not read `{path}`: {e}")
-        return None
+    return None
 
-def read_figure_captions(path=FIGURE_CAPTIONS_TXT):
-    mapping = {}
-    if not exists(path):
-        return mapping
+def nice_num(x: float | int | str) -> str:
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or ":" not in line:
-                    continue
-                fname, cap = line.split(":", 1)
-                mapping[fname.strip()] = cap.strip()
-    except Exception as e:
-        st.warning(f"Could not parse figure captions: {e}")
-    return mapping
-
-def metric_fmt(x):
-    if x is None or (isinstance(x, float) and np.isnan(x)):
-        return "—"
-    try:
-        x = float(x)
-        if abs(x) >= 1_000_000:
-            return f"{x/1_000_000:,.1f}M"
-        if abs(x) >= 1000:
-            return f"{x:,.0f}"
-        return f"{x:,.2f}" if not x.is_integer() else f"{x:,.0f}"
+        xf = float(x)
+        # Show integer with thousands separator if it is integer-ish
+        if abs(xf - int(xf)) < 1e-9:
+            return f"{int(xf):,}"
+        return f"{xf:,.2f}"
     except Exception:
         return str(x)
 
-def to_num(series, default=0.0):
-    """Convert to numeric safely."""
-    s = pd.to_numeric(series, errors="coerce")
-    return s.fillna(default)
-
-def safe_bool01(series):
-    """Map common labels (0/1, true/false, yes/no) to 0/1 numbers safely."""
-    s = series.copy()
-    if s.dtype.kind in "biufc":
-        return (to_num(s) > 0.5).astype(int)
-    s = s.astype(str).str.strip().str.lower()
-    true_vals = {"1", "true", "t", "yes", "y"}
-    return s.isin(true_vals).astype(int)
-
-def confusion_counts(y_true, y_pred):
-    y_true = np.asarray(y_true).astype(int)
-    y_pred = np.asarray(y_pred).astype(int)
-    tn = int(((y_true == 0) & (y_pred == 0)).sum())
-    fp = int(((y_true == 0) & (y_pred == 1)).sum())
-    fn = int(((y_true == 1) & (y_pred == 0)).sum())
-    tp = int(((y_true == 1) & (y_pred == 1)).sum())
-    return tn, fp, fn, tp
+def read_figure_captions(file_path: str) -> Dict[str, str]:
+    """Optional: parse a captions file with lines like 'age_distribution.png: Age is broad...'
+    Returns dict[filename] -> caption"""
+    caps: Dict[str, str] = {}
+    if not exists(file_path):
+        return caps
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if ":" in line:
+                    fname, cap = line.split(":", 1)
+                    caps[fname.strip()] = cap.strip()
+    except Exception:
+        pass
+    return caps
 
 
-# --------------------------------------------------------------------------------------
-# Main app (all wrapped so exceptions are shown inside the app)
-# --------------------------------------------------------------------------------------
-def main():
-    st.sidebar.title("Navigation")
-    page = st.sidebar.radio(
-        "Go to:",
-        ["Overview", "EDA Gallery", "Model Performance", "Score Explorer", "How to run"],
-        index=0,
+# --------------------------- Page config ---------------------------
+
+st.set_page_config(
+    page_title="Loan Serious-Late Prediction — Dashboard",
+    layout="wide",
+)
+
+st.title("Loan Serious-Late Prediction — Dashboard")
+
+# --------------------------- Sidebar ---------------------------
+
+with st.sidebar:
+    st.header("Navigation")
+    page = st.radio("Go to:", ["Overview", "EDA Gallery", "Model Performance", "Score Explorer", "How to run"], index=0)
+
+    st.markdown("#### Files this app expects:")
+    st.code("\n".join(EXPECTED_FILES), language="text")
+
+
+# --------------------------- Pages ---------------------------
+
+if page == "Overview":
+    # Key numbers: total clients, late rate, median income
+    key_csv = os.path.join(REPORTS_DIR, "key_numbers.csv")
+    dfk = read_csv_safe(key_csv)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.caption("Total clients")
+        if dfk is not None and "total_clients" in dfk.columns:
+            st.markdown(f"## {nice_num(dfk['total_clients'].iloc[0])}")
+        else:
+            st.markdown("## –")
+    with col2:
+        st.caption("Late rate")
+        if dfk is not None and "late_rate" in dfk.columns:
+            # Expect late_rate ~ 0.067 -> 6.7%
+            val = dfk["late_rate"].iloc[0]
+            try:
+                pct = float(val) * 100 if float(val) <= 1 else float(val)
+                st.markdown(f"## {pct:.1f}%")
+            except Exception:
+                st.markdown(f"## {val}")
+        else:
+            st.markdown("## –")
+    with col3:
+        st.caption("Median income")
+        if dfk is not None and "median_income" in dfk.columns:
+            st.markdown(f"## {nice_num(dfk['median_income'].iloc[0])}")
+        else:
+            st.markdown("## –")
+
+    st.markdown("### What’s here")
+    st.markdown(
+        "- **EDA Gallery:** all charts saved from the analysis.\n"
+        "- **Model Performance:** AUC/AP, thresholds, confusion matrices, lift/gains.\n"
+        "- **Score Explorer:** interact with holdout probabilities.\n"
+        "- **How to run:** simple instructions to reproduce."
     )
 
-    st.sidebar.markdown("### Files this app expects:")
-    expected = [
-        "reports/figures/*.png",
-        "reports/key_numbers.csv",
-        "exports/holdout_predictions.csv",
-        "exports/model_eval_summary.csv",
-        "exports/threshold_metrics.csv",
-        "exports/score_deciles_logreg.csv",
-        "exports/score_deciles_rf.csv",
-    ]
-    st.sidebar.code("\n".join(expected), language="text")
+elif page == "EDA Gallery":
+    st.subheader("EDA Gallery")
+    captions = read_figure_captions(os.path.join(REPORTS_DIR, "figure_captions.txt"))
 
-    # ------------------------------ Overview -----------------------------------------
-    if page == "Overview":
-        st.title("Loan Serious-Late Prediction — Dashboard")
+    pngs = sorted(glob.glob(os.path.join(FIG_DIR, "*.png")))
+    if not pngs:
+        st.info("No figures found in `reports/figures/*.png`.")
+    for img_path in pngs:
+        fname = os.path.basename(img_path)
+        cap = captions.get(fname, "")
+        st.subheader(fname)
+        if cap:
+            st.caption(cap)
+        # IMPORTANT: width must be 'stretch', 'content', or an int; never None.
+        st.image(img_path, caption=None, width="stretch")
+        st.divider()
 
-        kn = read_csv_safe(KEY_NUMBERS_CSV)
-        total_clients = late_rate = median_income = None
-        try:
-            if kn is not None and not kn.empty:
-                cols_lower = {c.lower(): c for c in kn.columns}
+elif page == "Model Performance":
+    st.subheader("Model Performance")
 
-                def pick(col, fallback_idx):
-                    c = cols_lower.get(col)
-                    if c:
-                        return kn.iloc[0][c]
-                    idx = min(fallback_idx, len(kn.columns) - 1)
-                    return kn.iloc[0][kn.columns[idx]]
+    # Helpful banner if summary CSV missing
+    summary_csv = os.path.join(EXPORTS_DIR, "model_eval_summary.csv")
+    if not exists(summary_csv):
+        st.warning("`exports/model_eval_summary.csv` is missing.", icon="⚠️")
+        st.button("Generate analysis outputs (run main.py)")  # Visual cue only
 
-                total_clients = pick("total_clients", 0)
-                late_rate = pick("late_rate", 1)
-                median_income = pick("median_income", 2)
-        except Exception as e:
-            st.info(f"key_numbers.csv present but unexpected format: {e}")
+    # Helper to try showing a figure by preferred name or fallback
+    def show_fig_block(title: str, preferred: Optional[str] = None, fallback: Optional[str] = None):
+        cand: Optional[str] = None
+        if preferred:
+            p = os.path.join(FIG_DIR, preferred)
+            if exists(p):
+                cand = p
+        if cand is None and fallback:
+            f = os.path.join(FIG_DIR, fallback)
+            if exists(f):
+                cand = f
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.caption("Total clients")
-            st.metric(label="", value=metric_fmt(total_clients))
-        with c2:
-            st.caption("Late rate")
-            try:
-                v = float(late_rate)
-                st.metric(label="", value=f"{v*100:.1f}%")
-            except Exception:
-                st.metric(label="", value="—")
-        with c3:
-            st.caption("Median income")
-            st.metric(label="", value=metric_fmt(median_income))
-
-        st.markdown("### What’s here")
-        st.markdown(
-            "- **EDA Gallery**: all charts saved from the analysis.\n"
-            "- **Model Performance**: AUC/AP, thresholds, confusion matrices, lift/gains.\n"
-            "- **Score Explorer**: interact with holdout probabilities.\n"
-            "- **How to run**: simple instructions to reproduce."
-        )
-
-    # ------------------------------- EDA Gallery --------------------------------------
-    elif page == "EDA Gallery":
-        st.title("EDA Gallery")
-
-        captions = read_figure_captions()
-        pngs = sorted(glob.glob(join(FIG_DIR, "*.png")))
-        if not pngs:
-            st.info(f"No figures found in `{FIG_DIR}`. Generate them with `python main.py`.")
+        if cand:
+            st.subheader(title)
+            st.image(cand, width="stretch")
         else:
-            for p in pngs:
-                fname = os.path.basename(p)
-                st.subheader(fname)
-                cap = captions.get(fname)
-                if cap:
-                    st.caption(cap)
-                show_image(p, caption=None, full=False)
-                st.divider()
+            miss = preferred or fallback or ""
+            st.caption(f"Missing figure: {miss}")
 
-    # ---------------------------- Model Performance -----------------------------------
-    elif page == "Model Performance":
-        st.title("Model Performance")
+    # Example sections (keep names the same as used in your analysis so paths match)
+    st.markdown("### Figures")
+    show_fig_block("Confusion — Logistic Regression",
+                   preferred="confusion_logreg.png",
+                   fallback="confusion_logreg.png")
+    show_fig_block("Confusion — Random Forest",
+                   preferred="confusion_rf.png",
+                   fallback="confusion_rf.png")
+    show_fig_block("ROC & PR Curves",
+                   preferred="roc_pr_curves.png",
+                   fallback="roc_pr_curves.png")
+    show_fig_block("Threshold Metrics",
+                   preferred="threshold_metrics.png",
+                   fallback="threshold_metrics.png")
+    show_fig_block("Lift / Gains",
+                   preferred="lift_gains.png",
+                   fallback="lift_gains.png")
 
-        if not exists(MODEL_EVAL_CSV):
-            st.warning(f"`{MODEL_EVAL_CSV}` is missing.")
-            st.button("Generate analysis outputs (run main.py)")
-        st.markdown("### Figures")
+    # Optional: show a small table if present
+    df_summary = read_csv_safe(summary_csv)
+    if df_summary is not None and not df_summary.empty:
+        st.markdown("### Evaluation summary")
+        st.dataframe(df_summary, use_container_width=True)
 
-        figure_sets = [
-            ("Confusion — Logistic Regression", ["confusion_logreg.png", "confusion_lr.png"]),
-            ("Confusion — Random Forest", ["confusion_rf.png", "confusion_random_forest.png"]),
-            ("ROC & PR curves", ["roc_pr_curves.png", "roc_curve.png", "pr_curve.png"]),
-            ("Lift & Gain", ["lift_gain.png", "lift_curve.png", "gain_curve.png"]),
-        ]
-        for title, names in figure_sets:
-            path = next((join(FIG_DIR, n) for n in names if exists(join(FIG_DIR, n))), None)
-            if path:
-                st.subheader(title)
-                show_image(path, full=False)
-                st.divider()
+elif page == "Score Explorer":
+    st.subheader("Score Explorer (holdout set)")
+    holdout_csv = os.path.join(EXPORTS_DIR, "holdout_predictions.csv")
+    dfh = read_csv_safe(holdout_csv)
+    if dfh is None:
+        st.info("Run `python main.py` first to create `exports/holdout_predictions.csv`.")
+    else:
+        # Show a preview with filters
+        with st.expander("Preview data", expanded=True):
+            st.dataframe(dfh.head(200), use_container_width=True)
 
-        eval_df = read_csv_safe(MODEL_EVAL_CSV)
-        if eval_df is not None:
-            st.subheader("Model evaluation summary")
-            st.dataframe(eval_df, height=400)
+        # Optional simple exploration: choose a probability threshold to view counts
+        if "score" in dfh.columns:
+            st.markdown("### Quick threshold check")
+            thr = st.slider("Threshold for positive (serious-late)", 0.0, 1.0, 0.5, 0.01)
+            preds = (dfh["score"] >= thr).astype(int)
+            st.write(
+                f"Predicted positives @ {thr:.2f}: **{int(preds.sum()):,}** "
+                f"out of **{len(preds):,}**"
+            )
 
-        thr_df = read_csv_safe(THRESHOLD_METRICS_CSV)
-        if thr_df is not None:
-            st.subheader("Threshold sweep metrics")
-            st.dataframe(thr_df, height=400)
+elif page == "How to run":
+    st.subheader("How to run")
 
-    # ------------------------------- Score Explorer -----------------------------------
-    elif page == "Score Explorer":
-        st.title("Score Explorer (holdout set)")
-        if not exists(HOLDOUT_PREDICTIONS_CSV):
-            st.info(f"Run `python main.py` first to create `{HOLDOUT_PREDICTIONS_CSV}`.")
-        else:
-            df = read_csv_safe(HOLDOUT_PREDICTIONS_CSV)
-            if df is None or df.empty:
-                st.info("Holdout predictions file is empty or unreadable.")
-            else:
-                # Detect columns
-                ycol = next((c for c in ["y", "target", "actual", "label", "serious_late"] if c in df.columns), None)
-                score_cols = [c for c in df.columns if c.lower().startswith("p_") or c.lower().endswith("_prob") or c.lower().endswith("_score")]
-                if not score_cols:
-                    score_cols = [c for c in df.columns if c != ycol and df[c].dtype.kind in "fc"]
+    st.markdown("#### Local steps (Windows / PyCharm / VS Code)")
+    st.code(
+        textwrap.dedent(
+            """
+            1) In Terminal, run:
+               python main.py
+               # This generates figures and CSVs into reports/ and exports/
 
-                if ycol is None or not score_cols:
-                    st.warning("Could not identify label/score columns automatically.")
-                    st.write("Columns:", list(df.columns))
-                else:
-                    model_col = st.selectbox("Score column", options=score_cols, index=0)
-                    thr = st.slider("Decision threshold", 0.0, 1.0, 0.5, 0.01)
-
-                    y_true = safe_bool01(df[ycol])
-                    y_prob = to_num(df[model_col]).clip(0, 1)
-                    y_pred = (y_prob >= thr).astype(int)
-
-                    tn, fp, fn, tp = confusion_counts(y_true, y_pred)
-                    acc = (tp + tn) / max(tn + fp + fn + tp, 1)
-                    tpr = tp / max(tp + fn, 1)
-                    fpr = fp / max(fp + tn, 1)
-                    prec = tp / max(tp + fp, 1)
-
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("Accuracy", f"{acc*100:,.1f}%")
-                    c2.metric("Recall (TPR)", f"{tpr*100:,.1f}%")
-                    c3.metric("Fall-out (FPR)", f"{fpr*100:,.1f}%")
-                    c4.metric("Precision", f"{prec*100:,.1f}%")
-
-                    st.markdown("#### Confusion matrix (counts)")
-                    st.table(pd.DataFrame(
-                        {"": ["Pred 0", "Pred 1"], "True 0": [tn, fp], "True 1": [fn, tp]}
-                    ))
-
-                    # Optional deciles
-                    dec_lr = read_csv_safe(SCORE_DECILES_LOGREG_CSV)
-                    dec_rf = read_csv_safe(SCORE_DECILES_RF_CSV)
-                    if dec_lr is not None or dec_rf is not None:
-                        names, tabs = [], []
-                        if dec_lr is not None:
-                            names.append("LogReg deciles")
-                        if dec_rf is not None:
-                            names.append("RF deciles")
-                        tabs = st.tabs(names)
-                        idx = 0
-                        if dec_lr is not None:
-                            with tabs[idx]:
-                                st.dataframe(dec_lr, height=350)
-                            idx += 1
-                        if dec_rf is not None:
-                            with tabs[idx]:
-                                st.dataframe(dec_rf, height=350)
-
-    # --------------------------------- How to run -------------------------------------
-    elif page == "How to run":
-        st.title("How to run")
-        st.markdown("#### Local steps (Windows / PyCharm)")
-        st.code(textwrap.dedent("""
-            1) In Terminal, run:  python main.py
-               - This generates figures and CSVs into reports/ and exports/
-
-            2) Start the dashboard:
+            2) Start the dashboard locally:
                python -m streamlit run dashboard.py
 
             3) Open the Local URL shown in the terminal (usually http://localhost:8501)
-        """))
-        st.markdown("### Files generated by the analysis")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**reports/**")
-            st.code("\n".join([
-                "reports/run_environment.txt",
-                "reports/cleaning_report.txt",
-                "reports/figure_captions.txt",
-                "reports/key_numbers.csv",
-                "reports/figures/*.png",
-            ]), language="text")
-        with c2:
-            st.markdown("**exports/**")
-            st.code("\n".join([
-                "exports/model_eval_summary.csv",
-                "exports/holdout_predictions.csv",
-                "exports/threshold_metrics.csv",
-                "exports/score_deciles_logreg.csv",
-                "exports/score_deciles_rf.csv",
-            ]), language="text")
+            """
+        )
+    )
 
+    st.markdown("#### Files generated by the analysis")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**reports/**")
+        st.code(
+            "reports/run_environment.txt\n"
+            "reports/cleaning_report.txt\n"
+            "reports/figure_captions.txt\n"
+            "reports/key_numbers.csv\n"
+            "reports/figures/*.png",
+            language="text",
+        )
+    with c2:
+        st.markdown("**exports/**")
+        st.code(
+            "exports/model_eval_summary.csv\n"
+            "exports/holdout_predictions.csv\n"
+            "exports/threshold_metrics.csv\n"
+            "exports/score_deciles_logreg.csv\n"
+            "exports/score_deciles_rf.csv",
+            language="text",
+        )
 
-# Run safely so any unexpected error is shown inside the app (not white screen)
-try:
-    main()
-except Exception as _e:
-    st.error("An unexpected error occurred in the app. Details:")
-    st.exception(_e)
+    st.markdown("#### Deploy on Streamlit Community Cloud / GitHub")
+    st.code(
+        textwrap.dedent(
+            """
+            requirements.txt  # include: streamlit, pandas, numpy, scikit-learn, matplotlib, seaborn (if used)
+            """
+        ),
+        language="text",
+    )
+
+# --------------------------- Footer note ---------------------------
+st.caption("This app never passes width=None to st.image and avoids deprecated use_container_width.")
