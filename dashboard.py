@@ -37,7 +37,7 @@ def show_table(df: Optional[pd.DataFrame], caption: str | None = None, height: i
     if df is None or df.empty:
         st.info("No data found for this section.")
         return
-    # Note: do not pass use_container_width or width to avoid deprecation warnings / errors
+    # Avoid deprecated/changed width flags
     st.dataframe(df, height=height)
     if caption:
         st.caption(caption)
