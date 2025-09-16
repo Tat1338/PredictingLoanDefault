@@ -1,8 +1,7 @@
 # dashboard.py
 # Streamlit dashboard for the Loan Default Exam Project
-# - Clean widths (no use_container_width warnings)
-# - Inline threshold metrics in Score Explorer
-# - Gentle fallbacks + downloads
+# - Uses use_container_width (no deprecation warnings)
+# - Optional one-click generator to run main.py on Streamlit Cloud
 
 import os
 import glob
@@ -30,12 +29,11 @@ def show_table(df: pd.DataFrame | None, caption: str | None = None, height: int 
     if df is None or df.empty:
         st.info("No data found for this section.")
         return
-    st.dataframe(df, height=height, use_column_width=False)  # width is controlled by columns
+    st.dataframe(df, height=height, use_container_width=False)
     if caption:
         st.caption(caption)
 
 def find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    """Return the first existing column from candidates."""
     for c in candidates:
         if c in df.columns:
             return c
@@ -43,6 +41,30 @@ def find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
 
 def safe_div(n: float, d: float) -> float:
     return (n / d) if d else np.nan
+
+def offer_generator(note: str = ""):
+    """Show a button that runs main.py to generate reports/ and exports/."""
+    st.warning(note or "Required files are missing. You can generate them here.")
+    if st.button("Generate analysis outputs (run main.py)", type="primary"):
+        import subprocess, sys
+        with st.status("Running main.py…", expanded=True) as status:
+            try:
+                # Run the analysis script with the same Python interpreter
+                proc = subprocess.run(
+                    [sys.executable, "main.py"],
+                    capture_output=True, text=True, check=True
+                )
+                st.write(proc.stdout[-4000:] or "(no stdout)")
+                if proc.stderr:
+                    st.write("stderr:")
+                    st.code(proc.stderr[-2000:], language="text")
+                status.update(label="Done", state="complete")
+            except subprocess.CalledProcessError as e:
+                st.error("main.py failed. See logs below.")
+                st.code((e.stdout or "")[-2000:] + "\n" + (e.stderr or "")[-2000:], language="text")
+                return
+        st.success("Files generated. Reloading…")
+        st.rerun()
 
 # ---------- sidebar ----------
 st.sidebar.title("Navigation")
@@ -120,14 +142,13 @@ elif page == "EDA Gallery":
                 st.subheader(fname)
                 if cap:
                     st.caption(cap)
-                # ✅ Fixed: responsive, no invalid width
-                st.image(img, use_column_width=True)
+                # ✅ modern, no deprecation
+                st.image(img, use_container_width=True)
                 st.divider()
 
 elif page == "Model Performance":
     st.title("Model Performance")
 
-    # Top metrics table
     perf = safe_read_csv(os.path.join(EXPORTS_DIR, "model_eval_summary.csv"))
     if perf is not None and not perf.empty:
         st.markdown("**Holdout metrics**")
@@ -139,20 +160,9 @@ elif page == "Model Performance":
             mime="text/csv",
             use_container_width=True,
         )
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if "AUC" in perf.columns and "model" in perf.columns:
-                auc_txt = " • ".join(f"{m}: {a:.3f}" for m, a in zip(perf["model"], perf["AUC"]))
-                st.success(f"AUC — {auc_txt}")
-        with c2:
-            if "AP" in perf.columns and "model" in perf.columns:
-                ap_txt = " • ".join(f"{m}: {a:.3f}" for m, a in zip(perf["model"], perf["AP"]))
-                st.info(f"Average Precision — {ap_txt}")
     else:
-        st.info("Run `python main.py` to generate `exports/model_eval_summary.csv`.")
+        offer_generator("`exports/model_eval_summary.csv` is missing.")
 
-    # Confusion matrices & curves if the PNGs exist
     figs = [
         ("Confusion — Logistic Regression", "cm_logreg_tuned.png", "cm_logreg.png"),
         ("Confusion — Random Forest", "cm_rf_tuned.png", "cm_rf.png"),
@@ -175,8 +185,7 @@ elif page == "Model Performance":
             path = os.path.join(FIG_DIR, fallback)
         if exists(path):
             st.subheader(title)
-            # ✅ Fixed: responsive, no invalid width
-            st.image(path, use_column_width=True)
+            st.image(path, use_container_width=True)  # ✅ modern
         else:
             st.caption(f"Missing: {preferred if preferred else ''}")
 
@@ -187,16 +196,14 @@ elif page == "Score Explorer":
     thr_metrics = safe_read_csv(os.path.join(EXPORTS_DIR, "threshold_metrics.csv"))
 
     if holdout is None or holdout.empty:
-        st.info("Run `python main.py` first to create `exports/holdout_predictions.csv`.")
+        offer_generator("`exports/holdout_predictions.csv` is missing.")
     else:
         st.markdown("Use the threshold slider to see how many would be flagged.")
-        # Detect available proba columns
         model_map = {}
         if "proba_logreg" in holdout.columns:
             model_map["Logistic Regression"] = "proba_logreg"
         if "proba_rf" in holdout.columns:
             model_map["Random Forest"] = "proba_rf"
-        # Fallback if custom names:
         if not model_map:
             for c in holdout.columns:
                 if c.lower().startswith("proba"):
@@ -222,11 +229,9 @@ elif page == "Score Explorer":
             with cC:
                 st.metric("Std. dev. score", f"{np.nanstd(probs):.3f}")
 
-            # quick histogram
             hist, edges = np.histogram(probs, bins=30, range=(0, 1))
             st.bar_chart(pd.DataFrame({"count": hist}, index=pd.Index(edges[:-1], name="p")), height=240)
 
-            # Inline metrics if we have y_true
             y_col = find_column(holdout, ["y_true", "target", "SeriousDlqin2yrs"])
             if y_col is not None:
                 y = holdout[y_col].astype(int).to_numpy()
@@ -253,19 +258,16 @@ elif page == "Score Explorer":
 
                 st.caption(f"Confusion matrix @ {thr:.2f}: TP={tp:,}, FP={fp:,}, TN={tn:,}, FN={fn:,}")
 
-            # If precomputed threshold_metrics.csv exists, show nearest row for current thr
             if thr_metrics is not None and not thr_metrics.empty and "threshold" in thr_metrics.columns:
                 nearest = thr_metrics.iloc[(thr_metrics["threshold"] - thr).abs().argsort()[:1]]
                 st.markdown("##### Nearest precomputed row from `threshold_metrics.csv`")
                 show_table(nearest, height=120)
 
-            # Show a few top-scored rows
             st.markdown("#### Top scores")
             top_n = st.number_input("Show top N scores", min_value=5, max_value=200, value=20, step=5)
             top_df = pd.DataFrame({"probability": probs}).sort_values("probability", ascending=False).head(int(top_n))
             show_table(top_df, caption="Highest-risk holdout predictions", height=300)
 
-            # Download
             st.download_button(
                 "Download holdout with scores (CSV)",
                 data=holdout.to_csv(index=False).encode("utf-8"),
@@ -319,4 +321,4 @@ elif page == "How to run":
         language="text"
     )
 
-    st.info("Tip: If you change code, just refresh the Streamlit page or rerun the command.")
+    st.info("Tip: You can also generate files from the buttons on 'Model Performance' or 'Score Explorer'.")
