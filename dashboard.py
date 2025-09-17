@@ -18,7 +18,8 @@ import streamlit as st
 FIG_DIR = "reports/figures"
 EXPORTS_DIR = "exports"
 
-st.set_page_config(page_title="Loan Default — Dashboard", layout="wide")
+# Updated browser tab title
+st.set_page_config(page_title="Loan Default Predictions - Dashboard", layout="wide")
 
 # ---------- helpers ----------
 def exists(p: str) -> bool:
@@ -37,7 +38,7 @@ def show_table(df: Optional[pd.DataFrame], caption: str | None = None, height: i
     if df is None or df.empty:
         st.info("No data found for this section.")
         return
-    # Avoid deprecated/changed width flags
+    # Note: do not pass use_container_width or width to avoid deprecation warnings / errors
     st.dataframe(df, height=height)
     if caption:
         st.caption(caption)
@@ -74,7 +75,8 @@ st.sidebar.code(
 
 # ---------- pages ----------
 if page == "Overview":
-    st.title("Loan Serious-Late Prediction — Dashboard")
+    # Updated on-page heading
+    st.title("Loan Default Predictions - Dashboard")
 
     col1, col2, col3 = st.columns(3)
     key_numbers = safe_read_csv("reports/key_numbers.csv")
