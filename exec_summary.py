@@ -1,537 +1,506 @@
-# exec_summary.py — Executive Summary generator (plain-English + deep insights)
-
-# - Age/Dependents/Income (plain English)
-# - Risk tiers (A–E)
-# - Threshold scenarios (capacity vs precision/recall)
-# - Comparison tables (with "Share of portfolio")
-# - Two-way patterns (e.g., Age×Income)
-# - Policy rules (draft)
-# - Top 10 Highest-Risk Microsegments (+ "Take away" + clear explanation)
-#
-# Usage (from your project root, with the app still running):
-#   .\.venv\Scripts\python.exe exec_summary.py
-# Then click Rerun in the Streamlit app → Executive Summary page.
+# exec_summary.py
+# Writes a plain-English executive summary to reports/executive_summary.md
+# - Restores all sections you liked (bullets, microsegments, comparison tables)
+# - Fixes "Takeaway" (no "micro" wording or variables)
+# - Proper Markdown tables so nothing vanishes
+# - Silences pandas groupby category warnings with observed=True
 
 from __future__ import annotations
-import os, textwrap
+
+import os
+from typing import Optional, Tuple, List
+
 import numpy as np
 import pandas as pd
 
 EXPORTS = "exports"
 REPORTS = "reports"
-os.makedirs(REPORTS, exist_ok=True)
+OUT_MD = os.path.join(REPORTS, "executive_summary.md")
+HOLDOUT_CSV = os.path.join(EXPORTS, "holdout_predictions.csv")
+WITH_FEATS_CSV = os.path.join(EXPORTS, "holdout_with_features.csv")
+MODEL_SUMMARY_CSV = os.path.join(EXPORTS, "model_eval_summary.csv")
 
-# ---------- helpers ----------
-def num(x, d=3):
-    return "—" if x is None or pd.isna(x) else f"{float(x):.{d}f}"
+# ---- configuration
+THRESHOLD = 0.30
+PREFERRED_PROBA_COLS = ["proba_rf", "proba_logreg"]  # pick in this order
 
-def pct(x, d=1):
-    return "—" if x is None or pd.isna(x) else f"{100*float(x):.{d}f}%"
+# ------------ helpers
 
-def fmt_int(x):
-    if x is None: return "—"
-    if isinstance(x, float) and pd.isna(x): return "—"
-    try: return f"{int(x):,}"
-    except Exception: return "—"
+def ensure_dirs():
+    os.makedirs(REPORTS, exist_ok=True)
 
-def ks_stat(y, p):
-    y = np.asarray(y).astype(int); p = np.asarray(p).astype(float)
-    if y.size == 0 or p.size == 0: return np.nan
-    pos = np.sort(p[y==1]); neg = np.sort(p[y==0])
-    if len(pos)==0 or len(neg)==0: return np.nan
-    grid = np.linspace(0,1,1001)
-    cdf_p = np.searchsorted(pos, grid, side="right")/len(pos)
-    cdf_n = np.searchsorted(neg, grid, side="right")/len(neg)
-    return float(np.max(np.abs(cdf_p-cdf_n)))
-
-def brier(y, p):
-    y = np.asarray(y).astype(float); p = np.asarray(p).astype(float)
-    if len(y)!=len(p) or len(y)==0: return np.nan
-    return float(np.mean((y-p)**2))
-
-def get_first_col(df: pd.DataFrame, names: list[str]) -> str | None:
-    for n in names:
-        if n in df.columns: return n
-    low = {c.lower(): c for c in df.columns}
-    for n in names:
-        if n.lower() in low: return low[n.lower()]
+def read_csv_safe(path: str) -> Optional[pd.DataFrame]:
+    try:
+        if os.path.exists(path):
+            return pd.read_csv(path)
+    except Exception:
+        return None
     return None
 
-def qbands(s: pd.Series, q=5, labels=None):
-    s = pd.to_numeric(s, errors="coerce")
-    if labels is None: labels = [f"Q{i}" for i in range(1, q+1)]
+def fmt_pct(x: float, d: int = 1) -> str:
+    if x is None or not np.isfinite(x): return "—"
+    return f"{100.0 * float(x):.{d}f}%"
+
+def fmt_float(x: float, d: int = 3) -> str:
+    if x is None or not np.isfinite(x): return "—"
+    return f"{float(x):.{d}f}"
+
+def fmt_int(x: float | int) -> str:
+    if x is None or (isinstance(x, float) and not np.isfinite(x)): return "—"
     try:
-        return pd.qcut(s, q=q, labels=labels, duplicates="drop")
+        return f"{int(round(float(x))):,}"
     except Exception:
-        s_clean = s.replace([np.inf, -np.inf], np.nan).dropna()
-        if s_clean.empty: return pd.Series([np.nan]*len(s), index=s.index)
-        bins = np.linspace(s_clean.min(), s_clean.max(), q+1)
-        try:
-            return pd.cut(s, bins=bins, labels=labels, include_lowest=True)
-        except Exception:
-            return pd.Series([np.nan]*len(s), index=s.index)
+        return str(x)
 
-# ---------- load data ----------
-perf = pd.read_csv(os.path.join(EXPORTS, "model_eval_summary.csv")) if os.path.exists(os.path.join(EXPORTS,"model_eval_summary.csv")) else None
+def pick_proba_col(df: pd.DataFrame) -> Tuple[str, str]:
+    for c in PREFERRED_PROBA_COLS:
+        if c in df.columns:
+            pretty = "Random Forest" if c == "proba_rf" else "Logistic Regression"
+            return c, pretty
+    for c in df.columns:
+        if str(c).lower().startswith("proba"):
+            return c, c
+    raise ValueError("No probability column found (expected proba_rf / proba_logreg).")
 
-hold = None
-for _p in [os.path.join(EXPORTS,"holdout_with_features.csv"),
-           os.path.join(EXPORTS,"holdout_predictions.csv")]:
-    if os.path.exists(_p):
-        hold = pd.read_csv(_p)
-        break
-if hold is None or hold.empty:
-    raise SystemExit("No holdout file found in exports/ (need holdout_with_features.csv or holdout_predictions.csv)")
+def confusion_at_threshold(y: np.ndarray, p: np.ndarray, thr: float) -> Tuple[int, int, int, int]:
+    pred = (p >= thr).astype(int)
+    tp = int(((pred == 1) & (y == 1)).sum())
+    tn = int(((pred == 0) & (y == 0)).sum())
+    fp = int(((pred == 1) & (y == 0)).sum())
+    fn = int(((pred == 0) & (y == 1)).sum())
+    return tp, fp, tn, fn
 
-thr  = pd.read_csv(os.path.join(EXPORTS, "threshold_metrics.csv")) if os.path.exists(os.path.join(EXPORTS,"threshold_metrics.csv")) else None
+def ks_statistic(y: np.ndarray, s: np.ndarray) -> float:
+    pos = s[y == 1]; neg = s[y == 0]
+    if pos.size == 0 or neg.size == 0:
+        return np.nan
+    grid = np.linspace(0.0, 1.0, 1001)
+    cdf_p = np.searchsorted(np.sort(pos), grid, side="right") / pos.size
+    cdf_n = np.searchsorted(np.sort(neg), grid, side="right") / neg.size
+    return float(np.max(np.abs(cdf_p - cdf_n)))
 
-# ---------- find columns ----------
-ycol = get_first_col(hold, ["y_true","target","SeriousDlqin2yrs"])
-proba_col = "proba_rf" if "proba_rf" in hold.columns else next((c for c in hold.columns if str(c).lower().startswith("proba")), None)
+# ------------ banding
 
-age_col   = get_first_col(hold, ["age","Age"])
-inc_col   = get_first_col(hold, ["MonthlyIncome","monthly_income","income"])
-dep_col   = get_first_col(hold, ["NumberOfDependents","Dependents","dependents"])
-util_col  = get_first_col(hold, ["RevolvingUtilizationOfUnsecuredLines","revolving_utilization","ruul"])
-debt_col  = get_first_col(hold, ["DebtRatio","debt_ratio"])
-open_col  = get_first_col(hold, ["NumberOfOpenCreditLinesAndLoans","open_credit_lines","open_lines"])
-late30    = get_first_col(hold, ["NumberOfTime30-59DaysPastDueNotWorse","NumberOfTimes30-59DaysPastDueNotWorse","times_30_59"])
-late60    = get_first_col(hold, ["NumberOfTime60-89DaysPastDueNotWorse","NumberOfTimes60-89DaysPastDueNotWorse","times_60_89"])
-late90    = get_first_col(hold, ["NumberOfTimes90DaysLate","times_90_plus"])
+def band_age(x: float) -> str:
+    try: a = float(x)
+    except Exception: return "Age: Missing"
+    if a < 30: return "<30"
+    if a < 40: return "30–39"
+    if a < 50: return "40–49"
+    if a < 60: return "50–59"
+    return "60+"
 
-# ---------- headline numbers ----------
-base_rate = float(pd.to_numeric(hold[ycol], errors="coerce").mean()) if ycol else np.nan
+def band_dependents(x: float) -> str:
+    try: d = int(float(x))
+    except Exception: return "Dependents: Missing"
+    if d <= 0: return "0"
+    if d <= 2: return "1–2"
+    return "3+"
 
-best_ap_name=best_auc_name=None; best_ap=best_auc=np.nan
-if perf is not None and not perf.empty:
-    if "AUC" in perf.columns: perf["AUC"] = pd.to_numeric(perf["AUC"], errors="coerce")
-    if "AP"  in perf.columns: perf["AP"]  = pd.to_numeric(perf["AP"],  errors="coerce")
-    if "AP" in perf.columns and perf["AP"].notna().any():
-        i=int(perf["AP"].idxmax()); best_ap=float(perf.loc[i,"AP"]); best_ap_name=str(perf.loc[i,"model"])
-    if "AUC" in perf.columns and perf["AUC"].notna().any():
-        i=int(perf["AUC"].idxmax()); best_auc=float(perf.loc[i,"AUC"]); best_auc_name=str(perf.loc[i,"model"])
+def quintile_labels(kind: str) -> List[str]:
+    if kind == "income":
+        return ["Income: Bottom 20%", "Income: Low 20%", "Income: Middle 20%", "Income: High 20%", "Income: Top 20%"]
+    if kind == "debt":
+        return ["Debt: Lowest 20%", "Debt: Low 20%", "Debt: Middle 20%", "Debt: High 20%", "Debt: Highest 20%"]
+    return ["Q1","Q2","Q3","Q4","Q5"]
 
-# threshold
-thr_star=0.30; prec=rec=np.nan; tp=fp=tn=fn=None
-if thr is not None and not thr.empty:
-    df=thr.copy()
-    pick=None
-    for c in ["F1","f1"]:
-        if c in df.columns and df[c].notna().any():
-            pick=df.sort_values(c, ascending=False).iloc[0]; break
-    if pick is None and {"precision","recall"}.issubset(df.columns):
-        cand=df[df["precision"]>=0.4].sort_values("recall", ascending=False)
-        pick=cand.iloc[0] if not cand.empty else df.iloc[0]
-    if pick is None: pick=df.iloc[0]
-    thr_star=float(pick.get("threshold",thr_star))
-    prec=pick.get("precision",pick.get("Precision",np.nan))
-    rec =pick.get("recall",   pick.get("Recall",   np.nan))
-    tp  =pick.get("tp",None); fp=pick.get("fp",None); tn=pick.get("tn",None); fn=pick.get("fn",None)
+def band_by_quintile(series: pd.Series, kind: str) -> pd.Series:
+    s = pd.to_numeric(series, errors="coerce")
+    valid = s.dropna()
+    if valid.empty:
+        return pd.Series([f"{kind.capitalize()}: Missing"] * len(s), index=s.index)
+    try:
+        q = pd.qcut(valid, q=5, labels=quintile_labels(kind))
+        out = pd.Series(index=s.index, dtype="object")
+        out.loc[valid.index] = q.astype(str).values
+        out = out.fillna(f"{kind.capitalize()}: Missing")
+        return out
+    except Exception:
+        return pd.Series([f"{kind.capitalize()}: All"] * len(s), index=s.index)
 
-# distribution & quality
-scores = pd.to_numeric(hold[proba_col], errors="coerce").clip(0,1) if proba_col else pd.Series(dtype=float)
-n = int(scores.notna().sum()) if proba_col else 0
-flagged = int((scores>=thr_star).sum()) if proba_col else 0
-flag_rate = flagged/n if n else np.nan
+def band_util(x: float) -> str:
+    v = pd.to_numeric(x, errors="coerce")
+    if not np.isfinite(v): return "Utilization: Missing"
+    if v <= 0.10: return "≤0.10"
+    if v <= 0.50: return "0.11–0.50"
+    if v <= 1.00: return "0.51–1.00"
+    if v <= 5.00: return "1.01–5.00"
+    return ">5.00"
 
-ks_val=brier_rf=mean_pos=mean_neg=np.nan
-if ycol and proba_col:
-    y=pd.to_numeric(hold[ycol], errors="coerce").fillna(0).astype(int)
-    ks_val = ks_stat(y, scores.to_numpy())
-    brier_rf = brier(y, scores.to_numpy())
-    mean_pos=float(scores[y==1].mean()) if (y==1).any() else np.nan
-    mean_neg=float(scores[y==0].mean()) if (y==0).any() else np.nan
-    if any(v is None for v in [tp,fp,tn,fn]):
-        pred=(scores>=thr_star).astype(int)
-        tp=int(((pred==1)&(y==1)).sum()); fp=int(((pred==1)&(y==0)).sum())
-        tn=int(((pred==0)&(y==0)).sum()); fn=int(((pred==0)&(y==1)).sum())
+def band_open_lines(x: float) -> str:
+    v = pd.to_numeric(x, errors="coerce")
+    if not np.isfinite(v): return "Open lines: Missing"
+    if v <= 2: return "≤2"
+    if v <= 6: return "3–6"
+    return "7+"
 
-# ---------- build bands for slices ----------
-def build_bands(df: pd.DataFrame):
-    bands = {}
-    if age_col:
-        age = pd.to_numeric(df[age_col], errors="coerce")
-        bands["age_band"] = pd.cut(age, bins=[0,30,40,50,60,200],
-                                   labels=["<30","30–39","40–49","50–59","60+"], include_lowest=True)
-    if inc_col:
-        inc = pd.to_numeric(df[inc_col], errors="coerce")
-        # Rename away from Q1..Q5 to avoid “quarter” confusion
-        bands["inc_q"] = qbands(
-            inc, q=5,
-            labels=["Income: Bottom 20%","Income: Low 20%","Income: Middle 20%","Income: High 20%","Income: Top 20%"]
-        )
-    if dep_col:
-        dep = pd.to_numeric(df[dep_col], errors="coerce")
-        bands["dep_band"] = pd.cut(dep.fillna(0), bins=[-1,0,2,100],
-                                   labels=["0","1–2","3+"], include_lowest=True)
-    if util_col:
-        u = pd.to_numeric(df[util_col], errors="coerce")
-        bands["util_band"] = pd.cut(u, bins=[-0.001,0.1,0.5,1.0,5.0, np.inf],
-                                    labels=["≤0.10","0.11–0.50","0.51–1.00","1.01–5.00",">5.00"], include_lowest=True)
-    if debt_col:
-        dr = pd.to_numeric(df[debt_col], errors="coerce")
-        bands["dr_q"] = qbands(
-            dr, q=5,
-            labels=["Debt: Lowest 20%","Debt: Low 20%","Debt: Middle 20%","Debt: High 20%","Debt: Highest 20%"]
-        )
-    if open_col:
-        op = pd.to_numeric(df[open_col], errors="coerce")
-        bands["open_band"] = pd.cut(op.fillna(0), bins=[-1,2,6,100],
-                                    labels=["≤2","3–6","7+"], include_lowest=True)
-    if any([late30, late60, late90]):
-        def to_num(c):
-            return pd.to_numeric(df[c], errors="coerce") if c else pd.Series([0]*len(df))
-        l30 = to_num(late30); l60 = to_num(late60); l90 = to_num(late90)
-        total_late = l30.fillna(0) + l60.fillna(0) + l90.fillna(0)
-        bands["late_band"] = pd.cut(total_late.fillna(0), bins=[-0.1,0.5,1.5,100],
-                                    labels=["none","1","2+"], include_lowest=True)
-    return bands
+def prior_delinq_band(row: pd.Series) -> str:
+    names = [
+        "NumberOfTimes90DaysLate",
+        "NumberOfTime30-59DaysPastDueNotWorse",
+        "NumberOfTime60-89DaysPastDueNotWorse",
+    ]
+    total = 0
+    for n in names:
+        if n in row:
+            v = pd.to_numeric(row[n], errors="coerce")
+            if np.isfinite(v): total += int(v)
+    if total <= 0: return "none"
+    if total == 1: return "1"
+    return "2+"
 
-bands = build_bands(hold)
+# ------------ table builders
 
-# ---------- plain-English headline ----------
-plain=[]
-plain.append(f"About **{pct(base_rate)}** of customers default today.")
-if best_ap_name: plain.append(f"**{best_ap_name}** performs best (AP **{num(best_ap,3)}**, AUC **{num(best_auc,3)}**).")
-if not pd.isna(flag_rate): plain.append(f"At cutoff **{num(thr_star,2)}**, about **{pct(flag_rate)}** of customers are flagged.")
-if not pd.isna(prec) and not pd.isna(rec): plain.append(f"Among flagged, ~**{num(prec,3)}** are true defaulters; we catch **{num(rec,3)}** of all defaulters.")
-if not pd.isna(ks_val): plain.append(f"Separation is strong (**KS {num(ks_val,3)}**); probabilities align (**Brier {num(brier_rf,3)}**).")
+def df_to_md_table(df: pd.DataFrame) -> str:
+    """Render a DataFrame as a GitHub-style Markdown table."""
+    cols = list(df.columns)
+    header = "| " + " | ".join(cols) + " |"
+    sep = "| " + " | ".join(["---"] * len(cols)) + " |"
+    rows = ["| " + " | ".join(str(df.iloc[i, j]) for j in range(len(cols))) + " |"
+            for i in range(len(df))]
+    return "\n".join([header, sep] + rows)
 
-counts_line=""
-if n:
-    scale=10000/n
-    flagged_10k=int(round(flagged*scale)); tp_10k=int(round((tp or 0)*scale)); fp_10k=int(round((fp or 0)*scale)); fn_10k=int(round((fn or 0)*scale))
-    counts_line=f"Per **10,000** customers: **{fmt_int(flagged_10k)} flagged** (~**{fmt_int(tp_10k)}** true, **{fmt_int(fp_10k)}** false alarms; **{fmt_int(fn_10k)}** missed)."
+def order_categorical(series: pd.Series, order: List[str]) -> pd.Series:
+    cat = pd.Categorical(series, categories=order, ordered=True)
+    return pd.Series(cat, index=series.index)
 
-# ---------- Age, Dependents & Income — plain English ----------
-easy_lines = []
-if ycol and "age_band" in bands:
-    df_age = pd.DataFrame({"y": pd.to_numeric(hold[ycol], errors="coerce"),
-                           "band": bands["age_band"]}).dropna()
-    if not df_age.empty:
-        r = df_age.groupby("band")["y"].mean()
-        hi, lo = r.idxmax(), r.idxmin()
-        easy_lines.append(f"**By age:** highest default in **{hi}** at **{pct(r.loc[hi])}**; lowest in **{lo}** at **{pct(r.loc[lo])}**.")
-if ycol and "dep_band" in bands:
-    df_dep = pd.DataFrame({"y": pd.to_numeric(hold[ycol], errors="coerce"),
-                           "band": bands["dep_band"]}).dropna()
-    if not df_dep.empty:
-        r = df_dep.groupby("band")["y"].mean()
-        hi, lo = r.idxmax(), r.idxmin()
-        easy_lines.append(f"**Dependents:** highest default with **{hi}** dependents at **{pct(r.loc[hi])}**; lowest in **{lo}** at **{pct(r.loc[lo])}**.")
-if ycol and "inc_q" in bands:
-    df_inc = pd.DataFrame({"y": pd.to_numeric(hold[ycol], errors="coerce"),
-                           "band": bands["inc_q"]}).dropna()
-    if not df_inc.empty:
-        r = df_inc.groupby("band")["y"].mean()
-        hi, lo = r.idxmax(), r.idxmin()
-        easy_lines.append(f"**Income:** highest default in **{hi}** at **{pct(r.loc[hi])}**; lowest in **{lo}** at **{pct(r.loc[lo])}**.")
-
-# ---------- risk tiers (A–E) ----------
-tiers_txt=""
-if proba_col and ycol:
-    qs = scores.rank(pct=True)
-    tier = pd.Series(index=scores.index, dtype="object")
-    tier[qs>0.60] = "E"
-    tier[(qs>0.40)&(qs<=0.60)]="D"
-    tier[(qs>0.20)&(qs<=0.40)]="C"
-    tier[(qs>0.10)&(qs<=0.20)]="B"
-    tier[(qs<=0.10)]="A"
-    df_t = pd.DataFrame({"tier":tier, "y":y, "s":scores})
-    g = df_t.groupby("tier", dropna=True)
-    out=[]
-    for t in ["A","B","C","D","E"]:
-        if t in g.groups:
-            gi=g.get_group(t); rate=pd.to_numeric(gi["y"], errors="coerce").mean(); share=len(gi)/len(df_t)
-            out.append(f"{t}: default **{pct(rate)}**, population **{pct(share)}**")
-    if out: tiers_txt = " • ".join(out)
-
-# ---------- threshold scenarios ----------
-scenarios_txt=""
-df_s = None
-if proba_col and ycol:
-    yv = y.to_numpy(); sv = scores.to_numpy()
-    rows=[]
-    for t in [0.20,0.25,0.30,0.35,0.40]:
-        pred=(sv>=t).astype(int)
-        TP=int(((pred==1)&(yv==1)).sum()); FP=int(((pred==1)&(yv==0)).sum())
-        TN=int(((pred==0)&(yv==0)).sum()); FN=int(((pred==0)&(yv==1)).sum())
-        precision = TP/(TP+FP) if TP+FP>0 else np.nan
-        recall    = TP/(TP+FN) if TP+FN>0 else np.nan
-        flagged   = TP+FP
-        cost10 = 10*FN + 1*FP
-        rows.append((t, flagged/len(yv), precision, recall, TP, FP, cost10))
-    df_s = pd.DataFrame(rows, columns=["threshold","flag_rate","precision","recall","TP","FP","cost_F1_10"])
-    scenarios_txt = " | ".join([f"t={r.threshold:.2f}: flag {pct(r.flag_rate)}, P={num(r.precision,3)}, R={num(r.recall,3)}, TP={fmt_int(r.TP)}, FP={fmt_int(r.FP)}, cost={fmt_int(r.cost_F1_10)}" for _,r in df_s.iterrows()])
-
-# ---------- comparison tables ----------
-def _mk_table_for_band(band_series: pd.Series, band_title: str) -> str | None:
-    if band_series is None:
-        return None
-    tmp = pd.DataFrame({"band": band_series})
-    if ycol:
-        tmp["y"] = pd.to_numeric(hold[ycol], errors="coerce")
-    if proba_col:
-        tmp["flag"] = (scores >= thr_star).astype(float)
-    tmp = tmp.dropna(subset=["band"])
-    if tmp.empty or ("y" not in tmp.columns):
-        return None
-
-    g = tmp.groupby("band", dropna=True)
-    pop = g.size() / len(tmp)
-    def_rate = g["y"].mean()
-    flag_rate = g["flag"].mean() if "flag" in tmp.columns else None
-
-    lines = []
-    lines.append(f"**{band_title}**\n")
-    lines.append("| Group | Share of portfolio | Default rate | Flag rate |")
-    lines.append("|---|---:|---:|---:|")
-    for lab in [str(x) for x in pop.index.tolist()]:
-        pop_pct = pct(pop.get(lab))
-        def_pct = pct(def_rate.get(lab))
-        flag_pct = pct(flag_rate.get(lab)) if flag_rate is not None else "—"
-        lines.append(f"| {lab} | {pop_pct} | {def_pct} | {flag_pct} |")
-    lines.append("")
-    return "\n".join(lines)
-
-tables = []
-try:
-    if "age_band"  in bands: tables.append(_mk_table_for_band(bands["age_band"], "Age bands"))
-    if "dep_band"  in bands: tables.append(_mk_table_for_band(bands["dep_band"], "Dependents"))
-    if "inc_q"     in bands: tables.append(_mk_table_for_band(bands["inc_q"], "Income (20% bands)"))
-    if "util_band" in bands: tables.append(_mk_table_for_band(bands["util_band"], "Revolving utilization"))
-    if "dr_q"      in bands: tables.append(_mk_table_for_band(bands["dr_q"], "Debt ratio (20% bands)"))
-    if "open_band" in bands: tables.append(_mk_table_for_band(bands["open_band"], "Open credit lines"))
-    if "late_band" in bands: tables.append(_mk_table_for_band(bands["late_band"], "Prior delinquencies"))
-except Exception:
-    pass
-
-# ---------- two-way patterns ----------
-def two_way_top(a: str, b: str, min_n: int = 200, top_k: int = 3):
-    if ycol is None or a not in bands or b not in bands: return []
-    tmp = pd.DataFrame({
-        "a": bands[a],
-        "b": bands[b],
-        "y": pd.to_numeric(hold[ycol], errors="coerce")
-    })
-    if proba_col:
-        tmp["flag"] = (scores >= thr_star).astype(float)
-    tmp = tmp.dropna(subset=["a","b"])
-    g = tmp.groupby(["a","b"])
-    stat = g.agg(n=("y","size"),
-                 rate=("y", "mean"),
-                 flag=("flag","mean") if "flag" in tmp.columns else ("y","mean")).reset_index()
-    stat = stat[stat["n"] >= min_n]
-    stat = stat.sort_values("rate", ascending=False).head(top_k)
-    out = []
-    for _, r in stat.iterrows():
-        out.append(f"{r['a']} × {r['b']}: default **{pct(r['rate'])}** (flag {pct(r['flag']) if 'flag' in stat.columns else '—'}, n={fmt_int(r['n'])})")
+def one_way_table_df(df: pd.DataFrame, band_col: str, y_col: str, p_col: str, thr: float) -> pd.DataFrame:
+    g = df.groupby(band_col, dropna=True, observed=True)
+    out = g.agg(
+        customers=(y_col, "size"),
+        defaults=(y_col, "sum"),
+        flagged=(p_col, lambda s: int((pd.to_numeric(s, errors="coerce") >= thr).sum()))
+    ).reset_index().rename(columns={band_col: "Group"})
+    total = out["customers"].sum()
+    out["Share of portfolio"] = out["customers"] / total if total else 0.0
+    out["Default rate"] = out["defaults"] / out["customers"]
+    out["Flag rate"] = out["flagged"] / out["customers"]
+    out = out[["Group", "Share of portfolio", "Default rate", "Flag rate"]]
     return out
 
-two_way_lines = []
-two_way_lines += [f"- {s}" for s in two_way_top("age_band","inc_q")]
-two_way_lines += [f"- {s}" for s in two_way_top("dep_band","inc_q")]
-two_way_lines += [f"- {s}" for s in two_way_top("util_band","dr_q")]
+def microsegments_top10_df(df: pd.DataFrame, a_col: str, b_col: str, y_col: str, p_col: str, thr: float, base_rate: float) -> Tuple[pd.DataFrame, str]:
+    tmp = df[[a_col, b_col, y_col, p_col]].copy()
+    tmp["flagged"] = (pd.to_numeric(tmp[p_col], errors="coerce") >= thr).astype(int)
+    g = tmp.groupby([a_col, b_col], dropna=True, observed=True)
+    mix = g.agg(
+        customers=(y_col, "size"),
+        defaults=(y_col, "sum"),
+        flagged=("flagged", "sum"),
+    ).reset_index().rename(columns={a_col: "Group A", b_col: "Group B"})
+    total = mix["customers"].sum()
+    mix["Share of portfolio"] = mix["customers"] / total if total else 0.0
+    mix["Default rate"] = mix["defaults"] / mix["customers"]
+    mix["Flag rate"] = mix["flagged"] / mix["customers"]
+    mix["Lift over base"] = mix["Default rate"] - base_rate
+    mix["Impact score"] = mix["Lift over base"].clip(lower=0) * mix["Share of portfolio"]
+    top = mix.sort_values(["Impact score", "Default rate", "Share of portfolio"], ascending=False).head(10)
+    # Takeaway
+    topA = top["Group A"].value_counts().idxmax() if not top.empty else None
+    topB = top["Group B"].value_counts().idxmax() if not top.empty else None
+    if topA and topB:
+        takeaway_text = (
+            f"Start with **{topA}** and **{topB}**. "
+            "These groups default more often than average, and there are enough customers in them to move losses. "
+            "Put extra checks or lower starting limits here first — this is where reviews deliver the biggest expected loss reduction."
+        )
+    elif topA:
+        takeaway_text = (
+            f"Start with **{topA}**. "
+            "This group defaults more than average and is large enough to matter. "
+            "Focusing reviews and tighter limits here will reduce losses fastest."
+        )
+    elif topB:
+        takeaway_text = (
+            f"Start with **{topB}**. "
+            "This group defaults more than average and is large enough to matter. "
+            "Focusing reviews and tighter limits here will reduce losses fastest."
+        )
+    else:
+        takeaway_text = "Focus first on the highest default-rate groups with a meaningful share of customers."
+    top = top[["Group A", "Group B", "Share of portfolio", "Default rate", "Flag rate"]]
+    return top.reset_index(drop=True), takeaway_text
 
-# ---------- policy rules (draft) ----------
-policy_lines = []
-def add_rule(name: str, mask: pd.Series):
-    if ycol is None: return
-    yv = pd.to_numeric(hold[ycol], errors="coerce")
-    nmask = int(mask.sum())
-    if nmask < 200: return
-    rate = yv[mask].mean()
-    share = nmask / len(hold)
-    if pd.isna(rate): return
-    if rate >= (base_rate or 0)*1.20:  # 20%+ over baseline
-        action = "Manual review + tighter limits" if rate >= (base_rate or 0)*1.50 else "Tighter limits or secondary checks"
-        policy_lines.append(f"- **{name}** — default **{pct(rate)}** (portfolio **{pct(share)}**). **Action:** {action}.")
+# ------------ main
 
-if "inc_q" in bands and "age_band" in bands:
-    add_rule("Low income (bottom 20%) & age <30", (bands["inc_q"]=="Income: Bottom 20%") & (bands["age_band"]=="<30"))
-if "util_band" in bands:
-    if "late_band" in bands:
-        add_rule("High utilization (≥1.01) with prior delinquency", bands["util_band"].isin(["1.01–5.00",">5.00"]) & (bands["late_band"]!="none"))
-    add_rule("Extreme utilization (>5.00)", bands["util_band"]==">5.00")
-if "dr_q" in bands and "open_band" in bands:
-    add_rule("Debt ratio highest 20% with ≤2 open lines", (bands["dr_q"]=="Debt: Highest 20%") & (bands["open_band"]=="≤2"))
-if "dep_band" in bands and "inc_q" in bands:
-    add_rule("No dependents & low income (bottom 20%)", (bands["dep_band"]=="0") & (bands["inc_q"]=="Income: Bottom 20%"))
+def build_summary() -> str:
+    ensure_dirs()
 
-# ---------- Top 10 Highest-Risk Microsegments (with Take away & explanation) ----------
-def top_microsegments(bands_dict: dict, min_n: int = 300, top_k: int = 10):
-    pairs_order = [
-        ("age_band", "inc_q"),
-        ("dep_band", "inc_q"),
-        ("util_band", "dr_q"),
-        ("open_band", "dr_q"),
-        ("late_band", "inc_q"),
-    ]
-    rows_num = []
-    weightA, weightB = {}, {}
+    preds = read_csv_safe(HOLDOUT_CSV)
+    if preds is None or preds.empty:
+        return "# Executive Summary\n\n*No predictions file found at `exports/holdout_predictions.csv`.*\n"
 
-    if ycol is None or proba_col is None:
-        return [], ""
+    # labels & probs
+    y_col = next((c for c in ["y_true", "target", "SeriousDlqin2yrs"] if c in preds.columns), None)
+    if y_col is None:
+        return "# Executive Summary\n\n*No label column found (expected y_true/target/SeriousDlqin2yrs).*"
+    proba_col, model_name = pick_proba_col(preds)
 
-    yv = pd.to_numeric(hold[ycol], errors="coerce")
-    flags = (scores >= thr_star).astype(float)
+    y = pd.to_numeric(preds[y_col], errors="coerce").fillna(0).astype(int).to_numpy()
+    p = pd.to_numeric(preds[proba_col], errors="coerce").clip(0, 1).to_numpy()
+    n = int(np.isfinite(p).sum())
+    base_rate = float(np.nanmean(y)) if n else np.nan
 
-    for a, b in pairs_order:
-        if a not in bands_dict or b not in bands_dict:
-            continue
-        df = pd.DataFrame({
-            "A": bands_dict[a],
-            "B": bands_dict[b],
-            "y": yv,
-            "flag": flags
-        }).dropna(subset=["A","B"])
-        if df.empty:
-            continue
+    tp, fp, tn, fn = confusion_at_threshold(y, p, THRESHOLD)
+    precision = tp / (tp + fp) if (tp + fp) else np.nan
+    recall = tp / (tp + fn) if (tp + fn) else np.nan
+    flagged_share = float((p >= THRESHOLD).mean()) if n else np.nan
+    ks = ks_statistic(y, p)
 
-        g = df.groupby(["A","B"], dropna=True)
-        stat = g.agg(n=("y","size"), rate=("y", "mean"), flag_rate=("flag","mean")).reset_index()
-        stat = stat[stat["n"] >= min_n]
-        if stat.empty:
-            continue
+    # model eval
+    auc_txt = ap_txt = None
+    eval_df = read_csv_safe(MODEL_SUMMARY_CSV)
+    if eval_df is not None and not eval_df.empty:
+        mrow = None
+        if "model" in eval_df.columns:
+            for _, row in eval_df.iterrows():
+                m = str(row.get("model", "")).lower()
+                if ("rf" in m and proba_col == "proba_rf") or ("log" in m and proba_col == "proba_logreg"):
+                    mrow = row
+                    break
+        if mrow is None:
+            mrow = eval_df.iloc[eval_df["AP"].astype(float).idxmax()] if "AP" in eval_df.columns else eval_df.iloc[0]
+        if "AUC" in mrow: auc_txt = fmt_float(float(mrow["AUC"]), 3)
+        if "AP"  in mrow: ap_txt  = fmt_float(float(mrow["AP"]),  3)
 
-        # totals for weights within this pair set
-        total_n = stat["n"].sum()
-        for _, r in stat.iterrows():
-            rate = float(r["rate"])
-            lift = rate / (base_rate if base_rate else np.nan)
-            pop_share_num = float(r["n"]) / float(total_n) if total_n else 0.0
-            flag_rate_num = float(r["flag_rate"])
-            seg = f"{r['A']} × {r['B']}"
+    # features
+    df_feat = read_csv_safe(WITH_FEATS_CSV)
+    have_features = df_feat is not None and not df_feat.empty
 
-            rows_num.append({
-                "seg": seg,
-                "rate_num": rate,
-                "lift_num": lift,
-                "pop_share_num": pop_share_num,
-                "flag_rate_num": flag_rate_num,
-                "n_num": int(r["n"]),
-                "_A": str(r["A"]),
-                "_B": str(r["B"]),
+    lines: List[str] = []
+    lines.append("# Executive Summary\n")
+
+    # Plain terms
+    lines.append("## What this means in plain terms")
+    lines.append(f"- About **{fmt_pct(base_rate)}** of customers default today.")
+    lines.append(f"- **{model_name}** is used for the summary.")
+    lines.append(f"- At a cutoff of **{THRESHOLD:.2f}**, about **{fmt_pct(flagged_share)}** of customers would be flagged.")
+    lines.append(f"- Among those flagged, precision is **{fmt_float(precision,3)}**; we catch **{fmt_float(recall,3)}** of future defaulters (recall).")
+    tail = []
+    if np.isfinite(ks): tail.append(f"KS: **{fmt_float(ks,3)}**")
+    if auc_txt: tail.append(f"AUC: **{auc_txt}**")
+    if ap_txt:  tail.append(f"AP: **{ap_txt}**")
+    if tail:
+        lines.append("- " + "  •  ".join(tail))
+    if np.isfinite(flagged_share):
+        flagged_10k = 10000 * flagged_share
+        total = tp + tn + fp + fn
+        tp_rate = tp / total if total else 0
+        fp_rate = fp / total if total else 0
+        fn_rate = fn / total if total else 0
+        lines.append(
+            f"- Per **10,000** customers at this cutoff: **{fmt_int(flagged_10k)}** flagged "
+            f"(~{fmt_int(10000*tp_rate)} true defaulters, {fmt_int(10000*fp_rate)} false alarms; "
+            f"{fmt_int(10000*fn_rate)} missed)."
+        )
+    lines.append("")
+
+    # Who to prioritise bullets (quick scan)
+    if have_features:
+        df = df_feat.copy()
+        df["y"] = pd.to_numeric(df[y_col], errors="coerce").fillna(0).astype(int)
+        df[proba_col] = pd.to_numeric(df[proba_col], errors="coerce").clip(0, 1)
+
+        # bands
+        if "age" in df: df["Age"] = df["age"].map(band_age)
+        if "NumberOfDependents" in df: df["Dependents"] = df["NumberOfDependents"].map(band_dependents)
+        if "MonthlyIncome" in df: df["Income (20% bands)"] = band_by_quintile(df["MonthlyIncome"], "income")
+        if "DebtRatio" in df: df["Debt ratio (20% bands)"] = band_by_quintile(df["DebtRatio"], "debt")
+        if "RevolvingUtilizationOfUnsecuredLines" in df: df["Revolving utilization"] = df["RevolvingUtilizationOfUnsecuredLines"].map(band_util)
+        if "NumberOfOpenCreditLinesAndLoans" in df: df["Open credit lines"] = df["NumberOfOpenCreditLinesAndLoans"].map(band_open_lines)
+        df["Prior delinquencies"] = df.apply(prior_delinq_band, axis=1)
+
+        bullets: List[str] = []
+
+        def add_max_note(label: str, colname: str):
+            if colname not in df: return
+            t = one_way_table_df(df, colname, "y", proba_col, THRESHOLD)
+            t2 = t[~t["Group"].str.contains("Missing", na=False)].copy()
+            if t2.empty: return
+            t2 = t2.sort_values("Default rate", ascending=False)
+            g = t2.iloc[0]
+            bullets.append(f"- **{label}:** highest default in **{g['Group']}** ({fmt_pct(g['Default rate'])}); flagged at {fmt_pct(g['Flag rate'])}.")
+
+        add_max_note("Age", "Age")
+        add_max_note("Dependents", "Dependents")
+        add_max_note("Income", "Income (20% bands)")
+
+        if bullets:
+            lines.append("## Who to prioritise for review or limits")
+            lines.extend(bullets)
+            lines.append("")
+
+        # Top-10 microsegments (Age × Income preferred)
+        pair: Optional[Tuple[str,str]] = None
+        if "Age" in df and "Income (20% bands)" in df:
+            pair = ("Age", "Income (20% bands)")
+        elif "Dependents" in df and "Income (20% bands)" in df:
+            pair = ("Dependents", "Income (20% bands)")
+        elif "Age" in df and "Dependents" in df:
+            pair = ("Age", "Dependents")
+
+        if pair:
+            top10_df, takeaway_text = microsegments_top10_df(df, pair[0], pair[1], "y", proba_col, THRESHOLD, base_rate)
+            show = top10_df.copy()
+            for c in ["Share of portfolio", "Default rate", "Flag rate"]:
+                show[c] = show[c].apply(lambda v: fmt_pct(v, 1))
+            lines.append(f"## Top 10 Highest-Risk Microsegments ({pair[0]} × {pair[1]})")
+            lines.append(df_to_md_table(show))
+            lines.append("")
+            lines.append(f"**Takeaway:** {takeaway_text}")
+            lines.append("")
+        # Clarify what each row represents
+        lines.append(
+            "_Each row is a **joint segment**: an **age band** combined with an **income band**. "
+            "'Share of portfolio' is the % of customers in that row. 'Default rate' is the observed rate in that row. "
+            "'Flag rate' is the % that would be flagged at the chosen threshold._"
+        )
+        lines.append("")
+
+        # Build a clear Takeaway from the top joint pairs (use first 2–3 rows)
+        pairs = []
+        for _, r in top10_df.head(3).iterrows():
+            a = str(r.get("Group A", "")).strip()
+            b = str(r.get("Group B", "")).strip()
+            if a and b:
+                pairs.append(f"**{a} × {b}**")
+
+        if pairs:
+            if len(pairs) == 1:
+                tw = pairs[0]
+            elif len(pairs) == 2:
+                tw = f"{pairs[0]} and {pairs[1]}"
+            else:
+                tw = f"{pairs[0]}, then {pairs[1]}, then {pairs[2]}"
+            lines.append(
+                f"**Takeaway:** Start with {tw}. These joint age–income groups have higher-than-average default "
+                "and enough customers to meaningfully reduce losses by adding checks or lower starting limits."
+            )
+            lines.append("")
+
+        # Priority groups (simple: rate vs. size) — no 'do first/next' phrasing
+        def join_pairs(lst):
+            if not lst: return "—"
+            if len(lst) == 1: return lst[0]
+            if len(lst) == 2: return f"{lst[0]} and {lst[1]}"
+            return f"{', '.join(lst[:-1])}, and {lst[-1]}"
+
+        # Use numeric values from the unformatted top10_df
+        median_share = float(top10_df["Share of portfolio"].median())
+        priority1, priority2 = [], []
+        for _, r in top10_df.iterrows():
+            a = str(r.get("Group A", "")).strip()
+            b = str(r.get("Group B", "")).strip()
+            if not a or not b:
+                continue
+            pair_label = f"**{a} × {b}**"
+            high_default = float(r["Default rate"]) > float(base_rate)
+            high_share = float(r["Share of portfolio"]) >= median_share
+            if high_default and high_share:
+                priority1.append(pair_label)  # Big & Risky
+            elif high_default and not high_share:
+                priority2.append(pair_label)  # Risky but Smaller
+
+        # Priority groups (table) — based on default rate vs. group size
+        median_share = float(top10_df["Share of portfolio"].median())
+        rows = []
+        for _, r in top10_df.iterrows():
+            a = str(r.get("Group A", "")).strip()
+            b = str(r.get("Group B", "")).strip()
+            if not a or not b:
+                continue
+            seg = f"{a} × {b}"
+            share = float(r["Share of portfolio"])
+            dr = float(r["Default rate"])
+            fr = float(r["Flag rate"])
+
+            high_default = dr > float(base_rate)
+            high_share = share >= median_share
+
+            if high_default and high_share:
+                prio = "Priority 1 — Big & Risky"
+            elif high_default and not high_share:
+                prio = "Priority 2 — Risky but Smaller"
+            else:
+                prio = "Priority 3/4 — Safer"
+
+            rows.append({
+                "Priority": prio,
+                "Segment": f"**{seg}**",
+                "Share of portfolio": share,
+                "Default rate": dr,
+                "Flag rate": fr
             })
 
-            # weights (risk × size) for take away
-            w = (lift if not pd.isna(lift) else 0.0) * pop_share_num
-            weightA[r["A"]] = weightA.get(r["A"], 0.0) + w
-            weightB[r["B"]] = weightB.get(r["B"], 0.0) + w
+        prio_df = pd.DataFrame(rows)
+        # Show the two action-oriented groups
+        prio_df = prio_df[prio_df["Priority"].isin([
+            "Priority 1 — Big & Risky",
+            "Priority 2 — Risky but Smaller"
+        ])]
 
-    if not rows_num:
-        return [], ""
+        # Order: Priority, then highest default, then bigger share
+        prio_df = prio_df.sort_values(
+            ["Priority", "Default rate", "Share of portfolio"],
+            ascending=[True, False, False]
+        ).reset_index(drop=True)
 
-    # global top_k by default rate
-    rows_num = sorted(rows_num, key=lambda d: d["rate_num"], reverse=True)[:top_k]
+        # Format percentages for display
+        prio_show = prio_df.copy()
+        for c in ["Share of portfolio", "Default rate", "Flag rate"]:
+            prio_show[c] = prio_show[c].apply(lambda v: fmt_pct(v, 1))
 
-    formatted = []
-    for r in rows_num:
-        formatted.append({
-            "Segment": r["seg"],
-            "Share of portfolio": pct(r["pop_share_num"]),
-            "Default rate": pct(r["rate_num"]),
-            "Lift vs base": num(r["lift_num"], 2),
-            "Flag rate": pct(r["flag_rate_num"]),
-            "n": fmt_int(r["n_num"]),
-        })
+        lines.append("### Priority groups (table)")
+        lines.append(df_to_md_table(prio_show))
+        lines.append("")
 
-    topA = max(weightA.items(), key=lambda kv: kv[1])[0] if weightA else None
-    topB = max(weightB.items(), key=lambda kv: kv[1])[0] if weightB else None
-    takeaway = ""
-    if topA and topB:
-        takeaway = f"Risk concentrates in **{topA}** combined with **{topB}**."
-    elif topA:
-        takeaway = f"Risk concentrates in **{topA}**."
-    elif topB:
-        takeaway = f"Risk concentrates in **{topB}**."
+        # Comparison tables
+        lines.append("## Comparison tables")
 
-    return formatted, takeaway
+        def add_table_block(title: str, colname: str, order: Optional[List[str]] = None):
+            if colname not in df: return
+            t = one_way_table_df(df, colname, "y", proba_col, THRESHOLD).copy()
+            if order:
+                t["Group"] = order_categorical(t["Group"], order)
+                t = t.sort_values("Group")
+                t["Group"] = t["Group"].astype(str)
+            for c in ["Share of portfolio", "Default rate", "Flag rate"]:
+                t[c] = t[c].apply(lambda v: fmt_pct(v, 1))
+            lines.append(f"### {title}")
+            lines.append(df_to_md_table(t))
+            lines.append("")
 
-micro_rows, micro_takeaway = top_microsegments(bands, min_n=300, top_k=10)
+        def order_categorical(series: pd.Series, order: List[str]) -> pd.Series:
+            cat = pd.Categorical(series, categories=order, ordered=True)
+            return pd.Series(cat, index=series.index)
 
-# ---------- compose markdown ----------
-parts=[]
-parts.append("# Executive Summary")
+        add_table_block("Age bands", "Age", ["<30","30–39","40–49","50–59","60+","Age: Missing"])
+        add_table_block("Dependents", "Dependents", ["0","1–2","3+","Dependents: Missing"])
+        add_table_block("Income (20% bands)", "Income (20% bands)", quintile_labels("income") + ["Income: Missing"])
+        add_table_block("Revolving utilization", "Revolving utilization", ["≤0.10","0.11–0.50","0.51–1.00","1.01–5.00",">5.00","Utilization: Missing"])
+        add_table_block("Debt ratio (20% bands)", "Debt ratio (20% bands)", quintile_labels("debt") + ["Debt: Missing"])
+        add_table_block("Open credit lines", "Open credit lines", ["≤2","3–6","7+","Open lines: Missing"])
+        add_table_block("Prior delinquencies", "Prior delinquencies", ["none","1","2+"])
 
-parts.append("\n## What this means in plain terms")
-parts.append("- " + "\n- ".join(plain))
-if counts_line: parts.append("\n" + counts_line)
+    # Model evidence + operating point
+    lines.append("## Model Quality (evidence)")
+    if ap_txt: lines.append(f"- Best by **AP**: {model_name} — AP **{ap_txt}**.")
+    if auc_txt: lines.append(f"- Best by **AUC**: {model_name} — AUC **{auc_txt}**.")
+    lines.append(f"- Base default rate: **{fmt_pct(base_rate)}**.")
+    lines.append("")
 
-if easy_lines:
-    parts.append("\n## Age, Dependents & Income — plain English")
-    parts.append("- " + "\n- ".join(easy_lines))
-    parts.append("**How to use this:** keep decisions score-driven and policy-compliant; use these slices to plan reviews and limits, not as stand-alone rules.")
+    lines.append("## Recommended operating point")
+    lines.append(f"- Threshold: **{THRESHOLD:.2f}**")
+    lines.append(f"- Precision: **{fmt_float(precision,3)}**, Recall: **{fmt_float(recall,3)}**")
+    lines.append(f"- Confusion mix: TP={fmt_int(tp)} FP={fmt_int(fp)} TN={fmt_int(tn)} FN={fmt_int(fn)}")
+    lines.append("- Guidance: treat a missed defaulter (FN) as ~10× a false alarm (FP). Pick the lowest-cost threshold that fits your review capacity.")
+    lines.append("")
 
-if tiers_txt:
-    parts.append("\n## Risk tiers (A–E)")
-    parts.append(f"- {tiers_txt}")
-    parts.append("**Use:** focus manual reviews on **A/B**, moderate limits on **C**, lighter touch on **D/E**.")
+    return "\n".join(lines).strip() + "\n"
 
-if scenarios_txt:
-    parts.append("\n## Threshold scenarios (capacity & trade-offs)")
-    parts.append(scenarios_txt)
-    parts.append("\n**Tip:** choose the row with the **lowest cost** that fits your review capacity.")
 
-if two_way_lines:
-    parts.append("\n## Two-way patterns (who is consistently riskier)")
-    parts.extend(two_way_lines)
-
-if policy_lines:
-    parts.append("\n## Policy rules (draft) — who to review or limit")
-    parts.extend(policy_lines)
-
-if any(tables):
-    parts.append("\n## Comparison tables")
-    parts.extend([t for t in tables if t])
-
-if micro_rows:
-    parts.append("\n## Top 10 Highest-Risk Microsegments")
-    parts.append("| Segment | Share of portfolio | Default rate | Lift vs base | Flag rate | n |")
-    parts.append("|---|---:|---:|---:|---:|---:|")
-    for r in micro_rows:
-        parts.append(f"| {r['Segment']} | {r['Share of portfolio']} | {r['Default rate']} | {r['Lift vs base']} | {r['Flag rate']} | {r['n']} |")
-    parts.append("")
-    if micro_takeaway:
-        parts.append(f"**Take away:** {micro_takeaway}")
-    parts.append(textwrap.dedent("""
-    **What this shows:** small, specific groups where risk clusters when two fields are combined (e.g., age with income, or utilization with debt ratio).
-
-    **How to read it**
-    - **Share of portfolio** — how many customers sit in that group.
-    - **Default rate** — loss risk inside the group.
-    - **Lift vs base** — how much worse than the overall average (1.20× = 20% higher than average).
-    - **Flag rate** — at the current cutoff, what share would be sent to review.
-
-    **How to act**
-    - Prioritise control actions (extra docs, manual checks, lower starting limits, pricing add-ons) for segments with **high default rate/lift** and a **meaningful share of the portfolio**.
-    - Keep final decisions **score-driven** and **policy-compliant**; segments focus your effort, not replace the score.
-    """).strip())
-
-parts.append("\n## Model Quality (evidence)")
-mq=[]
-if best_ap_name: mq.append(f"**Best by AP:** {best_ap_name} — AP **{num(best_ap,3)}**.")
-if best_auc_name: mq.append(f"**Best by AUC:** {best_auc_name} — AUC **{num(best_auc,3)}**.")
-if not pd.isna(base_rate) and not pd.isna(best_ap) and (base_rate or 0)>0:
-    mq.append(f"Base default rate: **{pct(base_rate)}**. Best AP ≈ **{num(best_ap,3)}** (~**{num(best_ap/(base_rate or np.nan),2)}×** random baseline).")
-if not pd.isna(ks_val): mq.append(f"Separation: **KS {num(ks_val,3)}**.")
-if not pd.isna(brier_rf): mq.append(f"Calibration: **Brier {num(brier_rf,3)}**.")
-parts.append("- " + "\n- ".join(mq) if mq else "- (add exports files to populate)")
-
-parts.append("\n## Recommended operating point")
-parts.append(f"- Threshold: **{num(thr_star,2)}**")
-parts.append(f"- Precision: **{num(prec,3)}**, Recall: **{num(rec,3)}**")
-if not any(v is None for v in [tp,fp,tn,fn]):
-    parts.append(f"- Confusion mix: TP={fmt_int(tp)} FP={fmt_int(fp)} TN={fmt_int(tn)} FN={fmt_int(fn)}")
-parts.append(textwrap.dedent("""
-**Costed impact (example):** treat a missed defaulter (FN) as ~10× a false alarm (FP). Pick the lowest-cost threshold that your team can review.
-""").strip())
-
-parts.append("\n## Recommendation")
-parts.append("Pilot for 4–6 weeks at the chosen cutoff. Monitor **precision, recall, Brier, KS, flag rate** weekly; recalibrate quarterly or on drift.")
-
-# ---------- write ----------
-out_path = os.path.join(REPORTS,"executive_summary.md")
-with open(out_path, "w", encoding="utf-8") as f:
-    f.write("\n".join(parts).strip() + "\n")
-print(f"Wrote {out_path}")
+if __name__ == "__main__":
+    md = build_summary()
+    ensure_dirs()
+    with open(OUT_MD, "w", encoding="utf-8") as f:
+        f.write(md)
+    print(f"Wrote {OUT_MD}")
