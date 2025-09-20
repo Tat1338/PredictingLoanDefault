@@ -14,6 +14,44 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import streamlit as st
+# ---- Palette ----
+COLORS = {
+    "INK":   "#0F172A",  # headers on light backgrounds
+    "OCEAN": "#0EA5E9",  # primary accent
+    "LIME":  "#10B981",  # positive
+    "GOLD":  "#F59E0B",  # warning
+    "BLUSH": "#EF4444",  # negative
+    "SLATE": "#334155",  # neutral
+}
+
+# ---- Header box helper ----
+def section_header(text: str, color: str = COLORS["OCEAN"]) -> None:
+    st.markdown(
+        f"""
+        <div style="
+            background:{color};
+            color:white;
+            padding:12px 16px;
+            border-radius:12px;
+            font-weight:700;
+            font-size:1.1rem;
+            margin: 1rem 0 0.75rem 0;">
+            {text}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+TITLE_COLORS = {
+    "Overview":           "#1D4ED8",  # blue 600
+    "EDA Gallery":        "#0EA5E9",  # sky 500
+    "Model Performance":  "#1E40AF",  # blue 800
+    "Score Explorer":     "#0891B2",  # cyan 600
+    "Executive Summary":  "#0D9488",  # teal 600
+    "How to run":         "#14B8A6",  # teal 500
+}
+section_header("Overview", TITLE_COLORS["Overview"])
+
 
 FIG_DIR = "reports/figures"
 EXPORTS_DIR = "exports"
