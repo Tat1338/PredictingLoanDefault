@@ -561,7 +561,6 @@ elif page == "Saved Figures":
 
     big_title("Saved Figures")
 
-
     def load_image_safe(path: str):
         try:
             img = Image.open(path)
@@ -574,7 +573,6 @@ elif page == "Saved Figures":
             raise RuntimeError(f"Unrecognized or unreadable image: {e}")
         except Exception as e:
             raise RuntimeError(str(e))
-
 
     patterns = ["reports/figures/*.png", "reports/figures/*.jpg", "reports/figures/*.jpeg"]
     files: list[str] = []
@@ -617,45 +615,6 @@ elif page == "Saved Figures":
                             )
                     except Exception:
                         pass
-
-    # Support common formats
-    patterns = ["reports/figures/*.png", "reports/figures/*.jpg", "reports/figures/*.jpeg"]
-    files = []
-    for pat in patterns:
-        files.extend(sorted(glob.glob(pat)))
-
-    if files:
-        section_title("reports/figures")
-        cols = st.columns(3)
-        for i, p in enumerate(files):
-            img, err = load_image_safe(p)
-            with cols[i % 3]:
-                if img is not None:
-                    st.image(img, use_container_width=True, caption=os.path.basename(p))
-                    with open(p, "rb") as f:
-                        st.download_button(
-                            label="Download",
-                            data=f.read(),
-                            file_name=os.path.basename(p),
-                            mime="image/png" if p.lower().endswith(".png") else "image/jpeg",
-                            key=f"dl_{i}_{os.path.basename(p)}",
-                        )
-                else:
-                    st.markdown(f"- Could not display: `{p}`")
-                    # Still provide a download link if the file exists
-                    try:
-                        with open(p, "rb") as f:
-                            st.download_button(
-                                label=f"Download {os.path.basename(p)}",
-                                data=f.read(),
-                                file_name=os.path.basename(p),
-                                mime="application/octet-stream",
-                                key=f"dl_err_{i}_{os.path.basename(p)}",
-                            )
-                    except Exception:
-                        pass
-    else:
-        st.markdown('<div class="block note">No images found in reports/figures.</div>', unsafe_allow_html=True)
 
 # ===================== 9) Data Quality =====================
 elif page == "Data Quality":
