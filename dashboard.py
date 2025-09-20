@@ -1,5 +1,8 @@
 # dashboard.py
 # Streamlit dashboard for the Loan Default Exam Project
+# - Teal color scheme with boxed headers
+# - Robust image rendering (read bytes) to avoid TypeError on cloud
+# - Same analysis logic you had, with gentle polish
 
 from __future__ import annotations
 
@@ -12,47 +15,69 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-# ✅ MUST be the first Streamlit call in the file (before any st.* decorator or use)
+# ----------------- MUST BE FIRST STREAMLIT CALL -----------------
 st.set_page_config(page_title="Loan Default Prediction — Dashboard", layout="wide")
+# ----------------------------------------------------------------
 
-# ---- Palette ----
-COLORS = {
-    "INK":   "#0F172A",  # headers on light backgrounds
-    "OCEAN": "#0EA5E9",  # primary accent
-    "LIME":  "#10B981",  # positive
-    "GOLD":  "#F59E0B",  # warning
-    "BLUSH": "#EF4444",  # negative
-    "SLATE": "#334155",  # neutral
-}
+# ===================== THEME & HEADER HELPERS ====================
+TEAL_MAIN  = "#0F766E"  # dark teal (page header band)
+TEAL_LIGHT = "#14B8A6"  # lighter teal (section band)
+INK        = "#0F172A"  # body text (reserved if needed)
 
-# ---- Header box helper ----
-def section_header(text: str, color: str = COLORS["OCEAN"]) -> None:
-    # definition is fine here; it does not run until you call it later
+def h1(title: str) -> None:
+    """Biggest title (H1). Uses Streamlit's native title size."""
+    st.title(title)
+
+def page_band(text: str) -> None:
+    """Medium-sized colored band for the current page name (Overview, EDA, ...)."""
     st.markdown(
         f"""
         <div style="
-            background:{color};
+            background:{TEAL_MAIN};
             color:white;
-            padding:12px 16px;
+            padding:10px 16px;
             border-radius:12px;
             font-weight:700;
-            font-size:1.1rem;
-            margin: 1rem 0 0.75rem 0;">
+            font-size:1.15rem;   /* smaller than H1, bigger than section */
+            letter-spacing:.2px;
+            margin:.25rem 0 1rem;">
             {text}
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-TITLE_COLORS = {
-    "Overview":           "#1D4ED8",  # blue 600
-    "EDA Gallery":        "#0EA5E9",  # sky 500
-    "Model Performance":  "#1E40AF",  # blue 800
-    "Score Explorer":     "#0891B2",  # cyan 600
-    "Executive Summary":  "#0D9488",  # teal 600
-    "How to run":         "#14B8A6",  # teal 500
-}
+def section_band(text: str) -> None:
+    """Small colored band for sub-sections within a page (e.g., 'Figures')."""
+    st.markdown(
+        f"""
+        <div style="
+            background:{TEAL_LIGHT};
+            color:white;
+            padding:8px 14px;
+            border-radius:10px;
+            font-weight:700;
+            font-size:1.0rem;    /* smaller than page band */
+            letter-spacing:.1px;
+            margin:1rem 0 .6rem;">
+            {text}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+# ================================================================
 
+# ---- Robust image helper (avoid PIL/type issues on cloud) ----
+def show_image(path: str, caption: str | None = None) -> None:
+    """Safely display an image file by reading bytes first."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        st.image(data, caption=caption, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Could not display {os.path.basename(path)} ({e}).")
+
+# ---- Paths ----
 FIG_DIR = "reports/figures"
 EXPORTS_DIR = "exports"
 
@@ -119,7 +144,6 @@ page = st.sidebar.radio(
     "Go to:",
     ["Overview", "EDA Gallery", "Model Performance", "Score Explorer", "Executive Summary", "How to run"]
 )
-
 st.sidebar.divider()
 st.sidebar.markdown("**Files this app expects:**")
 st.sidebar.code(
@@ -133,9 +157,10 @@ st.sidebar.code(
     language="text"
 )
 
-# ---------- pages ----------
+# ============================== PAGES ==============================
 if page == "Overview":
-    section_header("Overview", TITLE_COLORS["Overview"])
+    h1("Loan Default Prediction — Dashboard")
+    page_band("Overview")
 
     col1, col2, col3 = st.columns(3)
     key_numbers = safe_read_csv("reports/key_numbers.csv")
@@ -165,13 +190,14 @@ if page == "Overview":
             pieces.append(f"Clients **without dependants** show a default rate of **{nd}**, versus **{wd}** with dependants.")
 
         if pieces:
-            st.markdown("#### Summary insight\n" + " ".join(pieces))
+            section_band("Summary insight")
+            st.markdown(" ".join(pieces))
     else:
         with col1: st.metric("Total clients", "—")
         with col2: st.metric("Late rate", "—")
         with col3: st.metric("Median income", "—")
 
-    st.markdown("### What’s here")
+    section_band("What’s here")
     st.markdown(
         "- **EDA Gallery**: figures from the analysis.\n"
         "- **Model Performance**: AUC/AP, thresholds, confusion matrices, lift/gains.\n"
@@ -180,7 +206,8 @@ if page == "Overview":
     )
 
 elif page == "EDA Gallery":
-    section_header("EDA Gallery", TITLE_COLORS["EDA Gallery"])
+    h1("Loan Default Prediction — Dashboard")
+    page_band("EDA Gallery")
 
     if not os.path.isdir(FIG_DIR):
         st.warning(f"Folder not found: `{FIG_DIR}`")
@@ -201,29 +228,33 @@ elif page == "EDA Gallery":
                 except Exception:
                     pass
 
+            section_band("Figures")
             for img in images:
                 fname = os.path.basename(img)
                 st.subheader(fname)
                 cap = captions.get(fname, "")
                 if cap:
                     st.caption(cap)
-                st.image(img, caption=None, use_container_width=True)
+                show_image(img)  # robust display
                 st.divider()
 
 elif page == "Model Performance":
-    section_header("Model Performance", TITLE_COLORS["Model Performance"])
+    h1("Loan Default Prediction — Dashboard")
+    page_band("Model Performance")
 
     perf = safe_read_csv(os.path.join(EXPORTS_DIR, "model_eval_summary.csv"))
     holdout = safe_read_csv(os.path.join(EXPORTS_DIR, "holdout_predictions.csv"))
     thr_metrics = safe_read_csv(os.path.join(EXPORTS_DIR, "threshold_metrics.csv"))
+
     base_rate = None
     if holdout is not None:
         y_col = find_column(holdout, ["y_true", "target", "SeriousDlqin2yrs"])
         if y_col:
             base_rate = float(pd.to_numeric(holdout[y_col], errors="coerce").mean())
 
+    # --- metrics table
     if perf is not None and not perf.empty:
-        st.markdown("**Holdout metrics**")
+        section_band("Holdout metrics")
         show_table(perf, height=260)
 
         c1, c2 = st.columns(2)
@@ -257,10 +288,12 @@ elif page == "Model Performance":
             msgs.append(f"**Ranking by AUC:** {best_auc_name} shows the strongest overall ranking (**AUC {best_auc:.3f}**).")
 
         if msgs:
-            st.markdown("#### What the metrics say\n" + " ".join(msgs))
+            section_band("What the metrics say")
+            st.markdown(" ".join(msgs))
     else:
         st.info("Run `python main.py` to generate `exports/model_eval_summary.csv`.")
 
+    # --- Figures
     figs = [
         ("Confusion — Logistic Regression", "cm_logreg_tuned.png", "cm_logreg.png", "Logistic Regression"),
         ("Confusion — Random Forest", "cm_rf_tuned.png", "cm_rf.png", "Random Forest"),
@@ -286,14 +319,17 @@ elif page == "Model Performance":
             if not dfm.empty:
                 cand_cols = ["F1", "f1", "Recall", "recall"]
                 use_col = next((c for c in cand_cols if c in dfm.columns), None)
-                row = dfm.sort_values(use_col, ascending=False).iloc[0] if use_col else dfm.iloc[0]
+                if use_col:
+                    row = dfm.sort_values(use_col, ascending=False).iloc[0]
+                else:
+                    row = dfm.iloc[0]
                 tp = int(row.get("tp", np.nan)) if pd.notna(row.get("tp", np.nan)) else None
                 fp = int(row.get("fp", np.nan)) if pd.notna(row.get("fp", np.nan)) else None
                 tn = int(row.get("tn", np.nan)) if pd.notna(row.get("tn", np.nan)) else None
                 fn = int(row.get("fn", np.nan)) if pd.notna(row.get("fn", np.nan)) else None
                 prec = row.get("precision") if "precision" in row else row.get("Precision")
-                rec  = row.get("recall")    if "recall" in row    else row.get("Recall")
-                thr  = row.get("threshold") if "threshold" in row else None
+                rec = row.get("recall") if "recall" in row else row.get("Recall")
+                thr = row.get("threshold") if "threshold" in row else None
 
                 line = f"At a working cutoff {num(thr,2) if thr is not None else ''} the confusion mix is "
                 parts = []
@@ -301,7 +337,7 @@ elif page == "Model Performance":
                 if fp is not None: parts.append(f"FP={fp:,}")
                 if tn is not None: parts.append(f"TN={tn:,}")
                 if fn is not None: parts.append(f"FN={fn:,}")
-                if parts: line += ', '.join(parts) + '. '
+                if parts: line += ", ".join(parts) + ". "
                 if pd.notna(prec): line += f"Precision **{num(prec,3)}**. "
                 if pd.notna(rec):  line += f"Recall **{num(rec,3)}**. "
                 if base_rate is not None and pd.notna(rec):
@@ -318,27 +354,27 @@ elif page == "Model Performance":
                     if pd.notna(cap1):
                         texts.append(
                             f"The top **10%** of scores contain about **{pct(cap1)}** of all defaulters, "
-                            f"which is a strong prioritisation band for manual review."
+                            f"supporting targeted review."
                         )
                     break
-
         if texts:
             st.markdown("**What this figure tells us:** " + " ".join(texts))
 
-    st.markdown("### Figures")
+    section_band("Figures")
     for title, preferred, fallback, model_name in figs:
         path = os.path.join(FIG_DIR, preferred)
         if not exists(path) and fallback:
             path = os.path.join(FIG_DIR, fallback)
         if exists(path):
             st.subheader(title)
-            st.image(path, use_container_width=True)
+            show_image(path)  # robust display
             write_model_paragraph(model_name)
         else:
             st.caption(f"Missing: {preferred if preferred else ''}")
 
 elif page == "Score Explorer":
-    section_header("Score Explorer (holdout set)", TITLE_COLORS["Score Explorer"])
+    h1("Loan Default Prediction — Dashboard")
+    page_band("Score Explorer (holdout set)")
 
     holdout = safe_read_csv(os.path.join(EXPORTS_DIR, "holdout_predictions.csv"))
     thr_metrics = safe_read_csv(os.path.join(EXPORTS_DIR, "threshold_metrics.csv"))
@@ -348,6 +384,7 @@ elif page == "Score Explorer":
     else:
         st.markdown("Use the threshold slider to see how many would be flagged.")
 
+        # Detect probability columns
         model_map: dict[str, str] = {}
         if "proba_logreg" in holdout.columns:
             model_map["Logistic Regression"] = "proba_logreg"
@@ -378,9 +415,11 @@ elif page == "Score Explorer":
             with cC:
                 st.metric("Std. dev. score", num(np.nanstd(scores), 3))
 
+            # Histogram of scores
             hist, edges = np.histogram(scores, bins=30, range=(0, 1))
             st.bar_chart(pd.DataFrame({"count": hist}, index=pd.Index(edges[:-1], name="p")), height=240)
 
+            # Compute analytics with labels if available
             y_col = find_column(holdout, ["y_true", "target", "SeriousDlqin2yrs"])
             if y_col is not None:
                 y = pd.to_numeric(holdout[y_col], errors="coerce").fillna(0).astype(int).to_numpy()
@@ -397,7 +436,7 @@ elif page == "Score Explorer":
                 accuracy = safe_div(tp + tn, len(y))
                 f1 = safe_div(2 * precision * recall, precision + recall)
 
-                st.markdown("#### Threshold metrics (on holdout)")
+                section_band("Threshold metrics (on holdout)")
                 m1, m2, m3, m4, m5 = st.columns(5)
                 m1.metric("Precision", num(precision, 3))
                 m2.metric("Recall (TPR)", num(recall, 3))
@@ -407,6 +446,7 @@ elif page == "Score Explorer":
 
                 st.caption(f"Confusion @ {thr:.2f}: TP={tp:,}, FP={fp:,}, TN={tn:,}, FN={fn:,}")
 
+                # ---- ANALYSIS
                 base = float(y.mean()) if len(y) else np.nan
                 share_flagged = flagged / total if total else np.nan
                 mean_pos = float(np.nanmean(scores[y == 1])) if (y == 1).any() else np.nan
@@ -420,17 +460,19 @@ elif page == "Score Explorer":
                         • About **{pct(share_flagged)}** of the portfolio would be flagged at this cutoff (**{thr:.2f}**).  
                         • Portfolio default rate is **{pct(base)}**. Scores average **{num(mean_pos,3)}** for defaulters vs **{num(mean_neg,3)}** for non-defaulters.  
                         • Separation (KS) is **{num(ks,3)}** — values around 0.3–0.5 indicate useful rank ordering for credit risk.  
-                        • With precision **{num(precision,3)}** and recall **{num(recall,3)}**, this setting balances how many risky cases we catch versus the extra reviews created. Shift the slider left for more coverage (higher recall) or right for fewer false alarms (higher precision).
+                        • With precision **{num(precision,3)}** and recall **{num(recall,3)}**, this setting balances how many risky cases we catch versus the extra reviews created.
                         """
                     ).strip()
                 )
 
+            # Show nearest precomputed row if available
             if thr_metrics is not None and not thr_metrics.empty and "threshold" in thr_metrics.columns:
                 nearest = thr_metrics.iloc[(thr_metrics["threshold"] - thr).abs().argsort()[:1]]
-                st.markdown("##### Nearest precomputed row from `threshold_metrics.csv`")
+                section_band("Nearest precomputed row from threshold_metrics.csv")
                 show_table(nearest, height=120)
 
-            st.markdown("#### Top scores")
+            # Top scores table
+            section_band("Top scores")
             top_n = st.number_input("Show top N scores", min_value=5, max_value=200, value=20, step=5)
             top_df = pd.DataFrame({"probability": scores}).sort_values("probability", ascending=False).head(int(top_n))
             show_table(top_df, caption="Highest-risk holdout predictions", height=300)
@@ -443,7 +485,8 @@ elif page == "Score Explorer":
             )
 
 elif page == "Executive Summary":
-    section_header("Executive Summary", TITLE_COLORS["Executive Summary"])
+    h1("Loan Default Prediction — Dashboard")
+    page_band("Executive Summary")
 
     md_path = os.path.join("reports", "executive_summary.md")
     if exists(md_path):
@@ -466,7 +509,8 @@ elif page == "Executive Summary":
         st.info("No executive summary found. In a second terminal, run: .\\.venv\\Scripts\\python.exe exec_summary.py")
 
 elif page == "How to run":
-    section_header("How to run", TITLE_COLORS["How to run"])
+    h1("Loan Default Prediction — Dashboard")
+    page_band("How to run")
 
     st.code(
         "1) Run: python main.py  # generates reports/ and exports/\n"
@@ -475,7 +519,7 @@ elif page == "How to run":
         language="bash"
     )
 
-    st.markdown("**Files generated by the analysis**")
+    section_band("Files generated by the analysis")
     colA, colB = st.columns(2)
     with colA:
         st.write("**reports/**")
@@ -499,3 +543,4 @@ elif page == "How to run":
         )
 
     st.info("Tip: Refresh Streamlit after you change code or re-run `main.py`.")
+# ============================ END PAGES ============================
