@@ -1,8 +1,5 @@
 # dashboard.py
 # Streamlit dashboard for the Loan Default Exam Project
-# - Same layout you had
-# - Beginner-friendly, *result-focused* analysis under each chart/section
-# - Robust to missing files (skips gracefully)
 
 from __future__ import annotations
 
@@ -14,6 +11,10 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+# ✅ MUST be the first Streamlit call in the file (before any st.* decorator or use)
+st.set_page_config(page_title="Loan Default Prediction — Dashboard", layout="wide")
+
 # ---- Palette ----
 COLORS = {
     "INK":   "#0F172A",  # headers on light backgrounds
@@ -26,6 +27,7 @@ COLORS = {
 
 # ---- Header box helper ----
 def section_header(text: str, color: str = COLORS["OCEAN"]) -> None:
+    # definition is fine here; it does not run until you call it later
     st.markdown(
         f"""
         <div style="
@@ -50,14 +52,9 @@ TITLE_COLORS = {
     "Executive Summary":  "#0D9488",  # teal 600
     "How to run":         "#14B8A6",  # teal 500
 }
-section_header("Overview", TITLE_COLORS["Overview"])
-
 
 FIG_DIR = "reports/figures"
 EXPORTS_DIR = "exports"
-
-st.set_page_config(page_title="Loan Default Prediction — Dashboard", layout="wide")
-
 
 # ---------- small utils ----------
 def exists(p: str) -> bool:
@@ -123,7 +120,6 @@ page = st.sidebar.radio(
     ["Overview", "EDA Gallery", "Model Performance", "Score Explorer", "Executive Summary", "How to run"]
 )
 
-
 st.sidebar.divider()
 st.sidebar.markdown("**Files this app expects:**")
 st.sidebar.code(
@@ -139,7 +135,7 @@ st.sidebar.code(
 
 # ---------- pages ----------
 if page == "Overview":
-    st.title("Loan Default Prediction — Dashboard")
+    section_header("Overview", TITLE_COLORS["Overview"])
 
     col1, col2, col3 = st.columns(3)
     key_numbers = safe_read_csv("reports/key_numbers.csv")
@@ -154,7 +150,6 @@ if page == "Overview":
             med_inc = row.get("median_income_all", np.nan)
             st.metric("Median income", f"{float(med_inc):,.0f}" if pd.notna(med_inc) else "—")
 
-        # Analysis paragraph if extra fields exist
         pieces = []
         if "median_income_all" in row:
             pieces.append(f"Median income in the portfolio sits at **{float(row['median_income_all']):,.0f}**.")
@@ -170,9 +165,7 @@ if page == "Overview":
             pieces.append(f"Clients **without dependants** show a default rate of **{nd}**, versus **{wd}** with dependants.")
 
         if pieces:
-            st.markdown(
-                "#### Summary insight\n" + " ".join(pieces)
-            )
+            st.markdown("#### Summary insight\n" + " ".join(pieces))
     else:
         with col1: st.metric("Total clients", "—")
         with col2: st.metric("Late rate", "—")
@@ -187,7 +180,7 @@ if page == "Overview":
     )
 
 elif page == "EDA Gallery":
-    st.title("EDA Gallery")
+    section_header("EDA Gallery", TITLE_COLORS["EDA Gallery"])
 
     if not os.path.isdir(FIG_DIR):
         st.warning(f"Folder not found: `{FIG_DIR}`")
@@ -196,7 +189,6 @@ elif page == "EDA Gallery":
         if not images:
             st.info("No figures found yet. Run `python main.py` to generate them.")
         else:
-            # Optional captions authored by you
             captions = {}
             cap_path = os.path.join("reports", "figure_captions.txt")
             if exists(cap_path):
@@ -214,13 +206,12 @@ elif page == "EDA Gallery":
                 st.subheader(fname)
                 cap = captions.get(fname, "")
                 if cap:
-                    st.caption(cap)  # your own narrative if present
-                st.image(img, caption=None, width="stretch")
-                # If you want computed commentary here, export per-figure stats to a CSV and print them.
+                    st.caption(cap)
+                st.image(img, caption=None, use_container_width=True)
                 st.divider()
 
 elif page == "Model Performance":
-    st.title("Model Performance")
+    section_header("Model Performance", TITLE_COLORS["Model Performance"])
 
     perf = safe_read_csv(os.path.join(EXPORTS_DIR, "model_eval_summary.csv"))
     holdout = safe_read_csv(os.path.join(EXPORTS_DIR, "holdout_predictions.csv"))
@@ -231,12 +222,10 @@ elif page == "Model Performance":
         if y_col:
             base_rate = float(pd.to_numeric(holdout[y_col], errors="coerce").mean())
 
-    # --- metrics table
     if perf is not None and not perf.empty:
         st.markdown("**Holdout metrics**")
         show_table(perf, height=260)
 
-        # AUC/AP ribbons
         c1, c2 = st.columns(2)
         with c1:
             if "AUC" in perf.columns and "model" in perf.columns:
@@ -247,7 +236,6 @@ elif page == "Model Performance":
                 ap_txt = " • ".join(f"{m}: {float(a):.3f}" for m, a in zip(perf["model"], perf["AP"]))
                 st.info(f"Average Precision — {ap_txt}")
 
-        # --- ANALYSIS: who is best and by how much
         msgs = []
         if "AP" in perf.columns:
             best_ap_idx = int(perf["AP"].astype(float).idxmax())
@@ -273,7 +261,6 @@ elif page == "Model Performance":
     else:
         st.info("Run `python main.py` to generate `exports/model_eval_summary.csv`.")
 
-    # --- Figures with commentary (use CSVs when available)
     figs = [
         ("Confusion — Logistic Regression", "cm_logreg_tuned.png", "cm_logreg.png", "Logistic Regression"),
         ("Confusion — Random Forest", "cm_rf_tuned.png", "cm_rf.png", "Random Forest"),
@@ -290,29 +277,23 @@ elif page == "Model Performance":
         ("Permutation importance — RF", "pi_rf.png", None, "Random Forest"),
     ]
 
-    # helper to write per-model paragraph using threshold_metrics or deciles
     def write_model_paragraph(model_name: str):
         texts = []
-        # From threshold_metrics.csv (if present and has rows per model)
         if thr_metrics is not None and not thr_metrics.empty:
-            # Try to choose a "best" row per model (F1 max, else recall max, else first)
             dfm = thr_metrics.copy()
             if "model" in dfm.columns:
                 dfm = dfm[dfm["model"].astype(str).str.lower() == model_name.lower()]
             if not dfm.empty:
                 cand_cols = ["F1", "f1", "Recall", "recall"]
                 use_col = next((c for c in cand_cols if c in dfm.columns), None)
-                if use_col:
-                    row = dfm.sort_values(use_col, ascending=False).iloc[0]
-                else:
-                    row = dfm.iloc[0]
+                row = dfm.sort_values(use_col, ascending=False).iloc[0] if use_col else dfm.iloc[0]
                 tp = int(row.get("tp", np.nan)) if pd.notna(row.get("tp", np.nan)) else None
                 fp = int(row.get("fp", np.nan)) if pd.notna(row.get("fp", np.nan)) else None
                 tn = int(row.get("tn", np.nan)) if pd.notna(row.get("tn", np.nan)) else None
                 fn = int(row.get("fn", np.nan)) if pd.notna(row.get("fn", np.nan)) else None
                 prec = row.get("precision") if "precision" in row else row.get("Precision")
-                rec = row.get("recall") if "recall" in row else row.get("Recall")
-                thr = row.get("threshold") if "threshold" in row else None
+                rec  = row.get("recall")    if "recall" in row    else row.get("Recall")
+                thr  = row.get("threshold") if "threshold" in row else None
 
                 line = f"At a working cutoff {num(thr,2) if thr is not None else ''} the confusion mix is "
                 parts = []
@@ -320,28 +301,26 @@ elif page == "Model Performance":
                 if fp is not None: parts.append(f"FP={fp:,}")
                 if tn is not None: parts.append(f"TN={tn:,}")
                 if fn is not None: parts.append(f"FN={fn:,}")
-                if parts: line += ", ".join(parts) + ". "
+                if parts: line += ', '.join(parts) + '. '
                 if pd.notna(prec): line += f"Precision **{num(prec,3)}**. "
                 if pd.notna(rec):  line += f"Recall **{num(rec,3)}**. "
                 if base_rate is not None and pd.notna(rec):
                     line += f"Base default rate is **{pct(base_rate)}**, so recall at this cutoff captures that share of positives."
                 texts.append(line)
 
-        # From score deciles (capture in top buckets) if present
         for fname in ["score_deciles_logreg.csv", "score_deciles_rf.csv"]:
             p = os.path.join(EXPORTS_DIR, fname)
             if exists(p):
                 dec = safe_read_csv(p)
-                if dec is not None and not dec.empty:
-                    # expected columns: decile (1..10), capture_rate or cum_capture_rate, defaults, count
-                    if "decile" in dec.columns:
-                        d1 = dec.sort_values("decile").iloc[0]
-                        # try both names
-                        cap1 = d1.get("capture_rate", d1.get("cum_capture_rate", np.nan))
-                        if pd.notna(cap1):
-                            texts.append(f"The top **10%** of scores contain about **{pct(cap1)}** of all defaulters, "
-                                         f"which is a strong prioritisation band for manual review.")
-                        break
+                if dec is not None and not dec.empty and "decile" in dec.columns:
+                    d1 = dec.sort_values("decile").iloc[0]
+                    cap1 = d1.get("capture_rate", d1.get("cum_capture_rate", np.nan))
+                    if pd.notna(cap1):
+                        texts.append(
+                            f"The top **10%** of scores contain about **{pct(cap1)}** of all defaulters, "
+                            f"which is a strong prioritisation band for manual review."
+                        )
+                    break
 
         if texts:
             st.markdown("**What this figure tells us:** " + " ".join(texts))
@@ -353,13 +332,13 @@ elif page == "Model Performance":
             path = os.path.join(FIG_DIR, fallback)
         if exists(path):
             st.subheader(title)
-            st.image(path, width="stretch")
+            st.image(path, use_container_width=True)
             write_model_paragraph(model_name)
         else:
             st.caption(f"Missing: {preferred if preferred else ''}")
 
 elif page == "Score Explorer":
-    st.title("Score Explorer (holdout set)")
+    section_header("Score Explorer (holdout set)", TITLE_COLORS["Score Explorer"])
 
     holdout = safe_read_csv(os.path.join(EXPORTS_DIR, "holdout_predictions.csv"))
     thr_metrics = safe_read_csv(os.path.join(EXPORTS_DIR, "threshold_metrics.csv"))
@@ -369,7 +348,6 @@ elif page == "Score Explorer":
     else:
         st.markdown("Use the threshold slider to see how many would be flagged.")
 
-        # Detect probability columns
         model_map: dict[str, str] = {}
         if "proba_logreg" in holdout.columns:
             model_map["Logistic Regression"] = "proba_logreg"
@@ -400,11 +378,9 @@ elif page == "Score Explorer":
             with cC:
                 st.metric("Std. dev. score", num(np.nanstd(scores), 3))
 
-            # Histogram of scores
             hist, edges = np.histogram(scores, bins=30, range=(0, 1))
             st.bar_chart(pd.DataFrame({"count": hist}, index=pd.Index(edges[:-1], name="p")), height=240)
 
-            # Compute analytics with labels if available
             y_col = find_column(holdout, ["y_true", "target", "SeriousDlqin2yrs"])
             if y_col is not None:
                 y = pd.to_numeric(holdout[y_col], errors="coerce").fillna(0).astype(int).to_numpy()
@@ -431,7 +407,6 @@ elif page == "Score Explorer":
 
                 st.caption(f"Confusion @ {thr:.2f}: TP={tp:,}, FP={fp:,}, TN={tn:,}, FN={fn:,}")
 
-                # ---- ANALYSIS: what these numbers mean
                 base = float(y.mean()) if len(y) else np.nan
                 share_flagged = flagged / total if total else np.nan
                 mean_pos = float(np.nanmean(scores[y == 1])) if (y == 1).any() else np.nan
@@ -450,13 +425,11 @@ elif page == "Score Explorer":
                     ).strip()
                 )
 
-            # Show nearest precomputed row if available
             if thr_metrics is not None and not thr_metrics.empty and "threshold" in thr_metrics.columns:
                 nearest = thr_metrics.iloc[(thr_metrics["threshold"] - thr).abs().argsort()[:1]]
                 st.markdown("##### Nearest precomputed row from `threshold_metrics.csv`")
                 show_table(nearest, height=120)
 
-            # Top scores table
             st.markdown("#### Top scores")
             top_n = st.number_input("Show top N scores", min_value=5, max_value=200, value=20, step=5)
             top_df = pd.DataFrame({"probability": scores}).sort_values("probability", ascending=False).head(int(top_n))
@@ -468,17 +441,18 @@ elif page == "Score Explorer":
                 file_name="holdout_predictions.csv",
                 mime="text/csv",
             )
+
 elif page == "Executive Summary":
+    section_header("Executive Summary", TITLE_COLORS["Executive Summary"])
+
     md_path = os.path.join("reports", "executive_summary.md")
     if exists(md_path):
-        # Read and drop a leading "# Executive Summary" line if present
         with open(md_path, "r", encoding="utf-8") as f:
             content = f.read().lstrip("\ufeff")
         lines = content.splitlines()
         if lines and lines[0].strip().lower().startswith("# executive summary"):
             content = "\n".join(lines[1:]).lstrip()
 
-        st.title("Executive Summary")
         st.markdown(content)
 
         with open(md_path, "rb") as fh:
@@ -489,11 +463,10 @@ elif page == "Executive Summary":
                 mime="text/markdown",
             )
     else:
-        st.title("Executive Summary")
         st.info("No executive summary found. In a second terminal, run: .\\.venv\\Scripts\\python.exe exec_summary.py")
 
 elif page == "How to run":
-    st.title("How to run")
+    section_header("How to run", TITLE_COLORS["How to run"])
 
     st.code(
         "1) Run: python main.py  # generates reports/ and exports/\n"
