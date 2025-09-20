@@ -151,7 +151,7 @@ with st.sidebar:
         "Interactive Lab",
         "Modeling & Metrics",
         "Risk Buckets (A–D)",
-        "Lending Triage (Try a borrower)",
+        "Client Credit Check",
         "Saved Figures",
         "Data Quality",
         "Summary & Conclusion"
