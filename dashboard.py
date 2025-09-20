@@ -1,11 +1,13 @@
 # dashboard.py
-# Loan Default Dashboard — bank-friendly EDA + Modeling + A–D Buckets + Lending Triage
-# Keeps your teal style and side menu. Adds:
-# - "Lending Triage (Try a borrower)" page with GO/CAUTION/STOP verdict + risk gauge
-# - Summary table of A–D buckets (counts, default rate, avg Age/Income/Loans/Dependents)
-# - Examples of best (A) and worst (D) borrowers
-# - Clear notes for confusion matrix & bucket cutoffs
-# - Robust "Saved Figures" viewer
+# Loan Default Dashboard — EDA + Modeling + A–D Buckets + Client Credit Check
+# Enhancements:
+# - Threshold objective selector (F1 / Youden’s J / Cost-weighted)
+# - Calibration curve + Brier score
+# - Permutation importance (test set)
+# - Intro “Data & Methods” box
+# - Interactive Lab CSV export
+# - Robust Saved Figures viewer
+# - Teal styling, clear labels, same navigation
 
 from __future__ import annotations
 
@@ -23,10 +25,12 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     roc_auc_score, roc_curve, precision_recall_fscore_support,
     precision_recall_curve, auc as sk_auc,
-    confusion_matrix, accuracy_score
+    confusion_matrix, accuracy_score, brier_score_loss
 )
+from sklearn.calibration import calibration_curve
+from sklearn.inspection import permutation_importance
 
-# ===================== Page + Style =====================
+# ---------------- Page + Styles ----------------
 st.set_page_config(page_title="Loan Default — Dashboard", layout="wide")
 
 st.markdown("""
@@ -70,7 +74,7 @@ DISPLAY = {
     "SeriousDlqin2yrs": "Serious Delinquency (within 2 Years)"
 }
 
-# ===================== Data helpers =====================
+# ---------------- Data helpers ----------------
 REQUIRED_COLS = {
     "SeriousDlqin2yrs","RevolvingUtilizationOfUnsecuredLines","age",
     "NumberOfTime30-59DaysPastDueNotWorse","DebtRatio","MonthlyIncome",
@@ -100,6 +104,7 @@ def find_dataset() -> Optional[str]:
 def _to_numeric(df: pd.DataFrame) -> pd.DataFrame:
     for c in df.columns:
         df[c] = pd.to_numeric(df[c], errors="coerce")
+    # clean display (no decimals)
     if "age" in df.columns:
         df["age"] = df["age"].round().astype("Int64")
     if "MonthlyIncome" in df.columns:
@@ -122,8 +127,8 @@ if not csv_path:
     st.stop()
 df_full = load_data(csv_path)
 
-# Safe bin chart
 def safe_rate_by_bin(frame: pd.DataFrame, col: str, bins: int = 8) -> Optional[go.Figure]:
+    """Default rate by quantile bins with safe fallbacks."""
     try:
         if col not in frame.columns or frame[col].dropna().empty: return None
         tmp = frame[[col,"SeriousDlqin2yrs"]].dropna()
@@ -140,7 +145,7 @@ def safe_rate_by_bin(frame: pd.DataFrame, col: str, bins: int = 8) -> Optional[g
     except Exception:
         return None
 
-# ===================== Sidebar nav =====================
+# ---------------- Sidebar nav ----------------
 with st.sidebar:
     st.title("Navigation")
     page = st.radio("Go to", [
@@ -158,13 +163,13 @@ with st.sidebar:
     ], index=0)
     st.caption(f"Data source: `{csv_path}`")
 
-# ===================== 1) Introduction =====================
+# ---------------- 1) Introduction ----------------
 if page == "Introduction":
     big_title("Loan Default Dashboard")
     section_title("What this is")
     st.markdown("""
-This dashboard helps a bank understand which borrowers are more likely to **fall into serious delinquency within two years**.
-It starts with feature views, then modeling, then **A–D buckets** that group borrowers by risk.
+This dashboard helps a bank see which borrowers are more likely to have **serious delinquency within two years**.
+You’ll find feature views, model metrics, **A–D risk buckets**, and a **Client Credit Check** tool to test a single case.
     """)
     section_title("Key terms")
     st.markdown(
@@ -172,7 +177,6 @@ It starts with feature views, then modeling, then **A–D buckets** that group b
         "- **Card/Line Utilization**: balances on credit cards/lines ÷ credit limits (near 1.0 is close to maxed out).\n"
         "- **Debt Ratio**: total monthly debt payments ÷ monthly income."
     )
-
     section_title("Portfolio Snapshot")
     c1,c2,c3,c4 = st.columns(4)
     rows = len(df_full)
@@ -185,11 +189,19 @@ It starts with feature views, then modeling, then **A–D buckets** that group b
     c3.metric("Missing Monthly Income", f"{mi_missing:,}" if "MonthlyIncome" in df_full.columns else "—")
     c4.metric("Age span", f"{age_min}–{age_max}" if age_min is not None else "—")
 
-# ===================== 2) Feature Distributions =====================
+    section_title("Data & Methods")
+    st.markdown("""
+**Data source:** (replace with dataset name/link).  
+**Target:** 1 = serious delinquency within two years; 0 = otherwise.  
+**Prep:** numeric casting, remove invalid ages (≤0), median imputation for missing values, feature scaling for modeling.  
+**Model:** Logistic Regression with `class_weight='balanced'`, tested on a hold-out; metrics include ROC-AUC, PR-AUC, KS, **calibration**, and **Brier score**.  
+**Note:** Probabilities are estimates; use together with policy and manual review.
+""")
+
+# ---------------- 2) Feature Distributions ----------------
 elif page == "Feature Distributions":
     big_title("Feature Distributions")
 
-    # Target
     section_title("Serious Delinquency within 2 Years (0/1)")
     counts = df_full["SeriousDlqin2yrs"].value_counts().sort_index()
     fig = px.bar(x=[str(int(k)) for k in counts.index], y=counts.values,
@@ -198,7 +210,6 @@ elif page == "Feature Distributions":
     st.plotly_chart(fig, use_container_width=True)
     st.markdown('<div class="note">0 = no serious delinquency within two years; 1 = serious delinquency occurred.</div>', unsafe_allow_html=True)
 
-    # Main features
     section_title("Main features")
     show_cols = [c for c in [
         "age","MonthlyIncome","DebtRatio","RevolvingUtilizationOfUnsecuredLines",
@@ -211,13 +222,11 @@ elif page == "Feature Distributions":
         st.markdown(f"**{DISPLAY.get(c, c)}**")
         col1, col2 = st.columns([2,1])
         with col1:
-            fig = px.histogram(df_full, x=c, nbins=60,
-                               labels={c: DISPLAY.get(c, c)})
+            fig = px.histogram(df_full, x=c, nbins=60, labels={c: DISPLAY.get(c, c)})
             fig.update_layout(height=300, margin=dict(l=10,r=10,t=8,b=10))
             st.plotly_chart(fig, use_container_width=True)
         with col2:
-            v = px.violin(df_full, y=c, box=True, points=False,
-                          labels={c: DISPLAY.get(c, c)})
+            v = px.violin(df_full, y=c, box=True, points=False, labels={c: DISPLAY.get(c, c)})
             v.update_layout(height=145, margin=dict(l=10,r=10,t=8,b=6))
             st.plotly_chart(v, use_container_width=True)
             s = df_full[c].dropna()
@@ -227,7 +236,7 @@ elif page == "Feature Distributions":
                 st.plotly_chart(hlog, use_container_width=True)
         st.markdown('<hr class="separator" />', unsafe_allow_html=True)
 
-# ===================== 3) Relationships & Segments =====================
+# ---------------- 3) Relationships & Segments ----------------
 elif page == "Relationships & Segments":
     big_title("Relationships & Segments")
 
@@ -283,12 +292,12 @@ elif page == "Relationships & Segments":
         figD = px.bar(rate_by_dep, x="Dependents", y="Default rate (%)")
         figD.update_layout(height=320, margin=dict(l=10,r=10,t=8,b=10))
         st.plotly_chart(figD, use_container_width=True)
-    st.markdown('<div class="note">Higher bands for open lines/loans and dependents generally carry more risk.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="note">More open lines/loans and more dependents tend to show higher risk at the top bands.</div>', unsafe_allow_html=True)
 
     st.markdown('<hr class="separator" />', unsafe_allow_html=True)
 
     section_title("How common are serious past-due histories?")
-    # “Serious” here = multiple late payments or any 60–89 or 90+ day lates.
+    # “Serious” here = repeat late payments or any 60–89/90+ day lates.
     dl_cols = [c for c in ["NumberOfTime30-59DaysPastDueNotWorse","NumberOfTime60-89DaysPastDueNotWorse","NumberOfTimes90DaysLate"] if c in df_full.columns]
     if dl_cols:
         dd = df_full[dl_cols].fillna(0).sum(axis=1)  # total past-due events
@@ -298,9 +307,9 @@ elif page == "Relationships & Segments":
         bfig = px.bar(ct, x="Past-due band", y="Count")
         bfig.update_layout(height=300, margin=dict(l=10,r=10,t=8,b=10))
         st.plotly_chart(bfig, use_container_width=True)
-        st.markdown('<div class="note">“Serious” means repeat late payments or longer delays. Those bands are rarer but riskier.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="note">“Serious” means repeat lates or longer delays. These bands are rarer but riskier.</div>', unsafe_allow_html=True)
 
-# ===================== 4) Correlations & Outliers =====================
+# ---------------- 4) Correlations & Outliers ----------------
 elif page == "Correlations & Outliers":
     big_title("Correlations & Outliers")
     num_cols = [c for c in df_full.columns if pd.api.types.is_numeric_dtype(df_full[c])]
@@ -337,7 +346,7 @@ elif page == "Correlations & Outliers":
                 fig.update_layout(height=320, margin=dict(l=10,r=10,t=8,b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-# ===================== 5) Interactive Lab =====================
+# ---------------- 5) Interactive Lab ----------------
 elif page == "Interactive Lab":
     big_title("Interactive Lab (Filters + Default Rate by Bins + Threshold)")
 
@@ -379,23 +388,34 @@ elif page == "Interactive Lab":
 
     st.markdown('<hr class="separator" />', unsafe_allow_html=True)
 
-    section_title("Quick model — threshold tuner")
+    section_title("Quick model — threshold tuner (on filtered data)")
     if len(df) < 200 or df["SeriousDlqin2yrs"].nunique() < 2:
         st.info("Not enough filtered rows/classes to train a model. Loosen filters.")
     else:
         y = df["SeriousDlqin2yrs"].astype(int)
-        X_cols = [c for c in df.columns if c != "SeriousDlqin2yrs" and pd.api.types.is_numeric_dtype(df[c])]
-        X_df = df[X_cols].copy().fillna(df[X_cols].median(numeric_only=True))
+        X_cols_local = [c for c in df.columns if c != "SeriousDlqin2yrs" and pd.api.types.is_numeric_dtype(df[c])]
+        X_df = df[X_cols_local].copy().fillna(df[X_cols_local].median(numeric_only=True))
         X_train_df, X_test_df, y_train, y_test = train_test_split(X_df, y, test_size=0.2, random_state=42, stratify=y)
         scaler = StandardScaler(); X_train = scaler.fit_transform(X_train_df); X_test = scaler.transform(X_test_df)
         lr = LogisticRegression(max_iter=500, solver="liblinear", class_weight="balanced"); lr.fit(X_train, y_train)
         y_proba = lr.predict_proba(X_test)[:,1]; auc = roc_auc_score(y_test, y_proba)
-        th = st.slider("Decision threshold", 0.10, 0.90, 0.50, step=0.01); y_pred = (y_proba >= th).astype(int)
+        ths = np.linspace(0.05, 0.95, 181)
+        best_th, best_f1 = 0.50, -1
+        for th in ths:
+            pred = (y_proba >= th).astype(int)
+            _, _, f1, _ = precision_recall_fscore_support(y_test, pred, average="binary", zero_division=0)
+            if f1 > best_f1: best_f1, best_th = f1, th
+        th = st.slider("Decision threshold", 0.10, 0.90, float(best_th), step=0.01); y_pred = (y_proba >= th).astype(int)
         acc = accuracy_score(y_test, y_pred); prec, rec, f1, _ = precision_recall_fscore_support(y_test, y_pred, average="binary", zero_division=0)
         c1,c2,c3,c4 = st.columns(4)
         c1.metric("AUC", f"{auc:.3f}"); c2.metric("Precision (1)", f"{prec:.3f}"); c3.metric("Recall (1)", f"{rec:.3f}"); c4.metric("F1 (1)", f"{f1:.3f}")
 
-# ===================== 6) Modeling & Metrics =====================
+    st.markdown('<hr class="separator" />', unsafe_allow_html=True)
+    section_title("Export current filtered data")
+    csv_data = df.to_csv(index=False)
+    st.download_button("Download filtered dataset (CSV)", data=csv_data, file_name="filtered_dataset.csv", mime="text/csv")
+
+# ---------------- 6) Modeling & Metrics ----------------
 elif page == "Modeling & Metrics":
     big_title("Modeling & Metrics")
 
@@ -403,7 +423,7 @@ elif page == "Modeling & Metrics":
     X_cols = [c for c in df_full.columns if c != "SeriousDlqin2yrs" and pd.api.types.is_numeric_dtype(df_full[c])]
     X_df = df_full[X_cols].copy().fillna(df_full[X_cols].median(numeric_only=True))
 
-    TEST_SIZE, THRESH = 0.20, 0.50
+    TEST_SIZE = 0.20
     X_train_df, X_test_df, y_train, y_test = train_test_split(X_df, y, test_size=TEST_SIZE, random_state=42, stratify=y)
     scaler = StandardScaler(); X_train = scaler.fit_transform(X_train_df); X_test = scaler.transform(X_test_df)
     lr = LogisticRegression(max_iter=500, solver="liblinear", class_weight="balanced"); lr.fit(X_train, y_train)
@@ -418,7 +438,6 @@ elif page == "Modeling & Metrics":
     st.session_state["__X_test_index__"] = X_test_df.index.tolist()
     st.session_state["__y_test__"] = y_test.tolist()
     st.session_state["__y_proba__"] = y_proba.tolist()
-    st.session_state["__default_threshold__"] = THRESH
 
     section_title(f"ROC curve (AUC = {auc:.3f})")
     fpr, tpr, _ = roc_curve(y_test, y_proba)
@@ -429,7 +448,41 @@ elif page == "Modeling & Metrics":
                           height=380, margin=dict(l=10,r=10,t=40,b=10))
     st.plotly_chart(roc_fig, use_container_width=True)
 
-    y_pred = (y_proba >= THRESH).astype(int)
+    # ---------- Threshold objective selector ----------
+    section_title("Pick a decision threshold (objective)")
+    obj = st.selectbox(
+        "Threshold objective",
+        ["Maximize F1", "Maximize Youden’s J (TPR - FPR)", "Cost-weighted (set FN cost)"],
+        index=0
+    )
+    ths = np.linspace(0.05, 0.95, 181)
+    best_th, best_score = 0.50, -1
+
+    if obj == "Maximize F1":
+        for th in ths:
+            pred = (y_proba >= th).astype(int)
+            _, _, f1, _ = precision_recall_fscore_support(y_test, pred, average="binary", zero_division=0)
+            if f1 > best_score: best_score, best_th = f1, th
+
+    elif obj == "Maximize Youden’s J (TPR - FPR)":
+        fpr, tpr, thr = roc_curve(y_test, y_proba)
+        j = tpr - fpr
+        j_best_idx = int(np.argmax(j))
+        best_th = float(thr[j_best_idx])
+        best_score = float(j[j_best_idx])
+
+    else:
+        fn_cost = st.slider("False Negative cost (× FP)", 1, 20, 5, step=1)
+        for th in ths:
+            pred = (y_proba >= th).astype(int)
+            tn, fp, fn, tp = confusion_matrix(y_test, pred, labels=[0,1]).ravel()
+            cost = fp + fn_cost * fn  # minimize cost
+            score = -cost
+            if score > best_score: best_score, best_th = score, th
+
+    st.metric("Chosen threshold", f"{best_th:.2f}")
+    y_pred = (y_proba >= best_th).astype(int)
+
     acc = accuracy_score(y_test, y_pred)
     prec, rec, f1, _ = precision_recall_fscore_support(y_test, y_pred, average="binary", zero_division=0)
     cm = confusion_matrix(y_test, y_pred, labels=[0,1])
@@ -454,6 +507,7 @@ elif page == "Modeling & Metrics":
         f"</div>", unsafe_allow_html=True
     )
 
+    # ---------- Feature importance (|coef|) ----------
     coef = pd.Series(lr.coef_[0], index=X_cols).abs().sort_values(ascending=False)
     fi = coef.head(min(15, len(coef))).reset_index()
     fi.columns = ["feature","importance(|coef|)"]
@@ -462,6 +516,20 @@ elif page == "Modeling & Metrics":
     fi_fig.update_layout(height=360, margin=dict(l=10,r=10,t=8,b=10), xaxis_tickangle=-30)
     st.plotly_chart(fi_fig, use_container_width=True)
 
+    # ---------- Permutation importance (test set) ----------
+    section_title("Permutation importance (test set)")
+    sample_idx = np.random.RandomState(42).choice(len(X_test_df), size=min(2000, len(X_test_df)), replace=False)
+    X_perm = X_test_df.iloc[sample_idx]
+    y_perm = y_test.iloc[sample_idx]
+    X_perm_sc = scaler.transform(X_perm)
+    pi = permutation_importance(lr, X_perm_sc, y_perm, n_repeats=8, random_state=42, scoring="roc_auc")
+    pi_df = pd.DataFrame({"feature": X_cols, "importance": pi.importances_mean}).sort_values("importance", ascending=False).head(15)
+    pi_fig = px.bar(pi_df, x="feature", y="importance")
+    pi_fig.update_layout(height=360, margin=dict(l=10,r=10,t=8,b=10), xaxis_tickangle=-30)
+    st.plotly_chart(pi_fig, use_container_width=True)
+    st.caption("Permutation importance = drop in AUC when shuffling a feature (higher = more influential).")
+
+    # ---------- PR curve ----------
     section_title("Precision–Recall curve")
     precs, recs, _thr = precision_recall_curve(y_test, y_proba)
     pr_auc = sk_auc(recs, precs)
@@ -470,6 +538,19 @@ elif page == "Modeling & Metrics":
     pr_fig.update_layout(xaxis_title="Recall", yaxis_title="Precision", height=360, margin=dict(l=10,r=10,t=40,b=10))
     st.plotly_chart(pr_fig, use_container_width=True)
 
+    # ---------- Calibration curve + Brier ----------
+    section_title("Calibration (reliability) & Brier score")
+    prob_true, prob_pred = calibration_curve(y_test, y_proba, n_bins=10, strategy="quantile")
+    brier = brier_score_loss(y_test, y_proba)
+    cal_fig = go.Figure()
+    cal_fig.add_trace(go.Scatter(x=prob_pred, y=prob_true, mode="lines+markers", name="Calibration"))
+    cal_fig.add_trace(go.Scatter(x=[0,1], y=[0,1], mode="lines", name="Perfect", line=dict(dash="dash")))
+    cal_fig.update_layout(xaxis_title="Predicted probability", yaxis_title="Observed default rate",
+                          height=360, margin=dict(l=10,r=10,t=40,b=10))
+    st.plotly_chart(cal_fig, use_container_width=True)
+    st.caption(f"Brier score: **{brier:.4f}** (lower is better).")
+
+    # ---------- KS + Gains ----------
     section_title("KS curve (cumulative separation)")
     df_ks = pd.DataFrame({"y": y_test.values, "p": y_proba}).sort_values("p", ascending=True)
     df_ks["cum_all"] = np.arange(1, len(df_ks)+1)/len(df_ks)
@@ -498,11 +579,11 @@ elif page == "Modeling & Metrics":
                            height=360, margin=dict(l=10,r=10,t=40,b=10))
     st.plotly_chart(lift_fig, use_container_width=True)
 
-# ===================== 7) Risk Buckets (A–D) =====================
+# ---------------- 7) Risk Buckets (A–D) ----------------
 elif page == "Risk Buckets (A–D)":
     big_title("Risk Buckets (A–D) & Likely Defaulters")
 
-    # If model page was not opened yet, build a lightweight model
+    # Ensure model/scores exist
     if "__y_proba__" not in st.session_state:
         y_all = df_full["SeriousDlqin2yrs"].astype(int)
         X_cols_all = [c for c in df_full.columns if c != "SeriousDlqin2yrs" and pd.api.types.is_numeric_dtype(df_full[c])]
@@ -519,7 +600,6 @@ elif page == "Risk Buckets (A–D)":
         st.session_state["__X_test_index__"] = Xte.index.tolist()
         st.session_state["__y_test__"] = yte.tolist()
         st.session_state["__y_proba__"] = y_pr.tolist()
-        st.session_state["__default_threshold__"] = 0.50
 
     idx = st.session_state["__X_test_index__"]
     y_test = st.session_state["__y_test__"]
@@ -541,8 +621,7 @@ elif page == "Risk Buckets (A–D)":
     cut_B = colB.number_input("B/C cutoff", cut_A, 0.995, 0.25, step=0.01)
     cut_C = colC.number_input("C/D cutoff", cut_B, 1.00, 0.50, step=0.01)
     st.caption(f"A < {cut_A:.2f}  •  {cut_A:.2f}–{cut_B:.2f} = B  •  {cut_B:.2f}–{cut_C:.2f} = C  •  D ≥ {cut_C:.2f}")
-    st.markdown("<div class='note'>Cutoffs split the scored borrowers into four risk bands. "
-                "Move these to balance how many people you flag vs. how risky they are.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='note'>Cutoffs split the scored borrowers into four risk bands. Move these to balance flagged volume vs risk.</div>", unsafe_allow_html=True)
 
     def bucketize(p: float)->str:
         if p < cut_A: return "A"
@@ -554,7 +633,7 @@ elif page == "Risk Buckets (A–D)":
     section_title("Portfolio mix by bucket")
     mix = (scored.groupby("bucket")["prob_default"]
            .agg(count="size", avg_prob="mean").reindex(["A","B","C","D"]).fillna(0))
-    mix["default_rate(%)"] = 100*mix["avg_prob"]
+    mix["default_rate(%)"] = (100*mix["avg_prob"]).round(1)
     mix = mix.astype({"count":int})
     st.dataframe(mix.reset_index().rename(columns={"bucket":"Bucket","count":"Borrowers",
                                                    "default_rate(%)":"Avg predicted default (%)"}),
@@ -573,12 +652,12 @@ elif page == "Risk Buckets (A–D)":
     csv = scored[["BorrowerID","prob_default","true_label","bucket"] + extras].sort_values("prob_default", ascending=False).to_csv(index=False)
     st.download_button("Download full scored test set (CSV)", data=csv, file_name="scored_test_with_buckets.csv", mime="text/csv")
 
-# ===================== 8) Lending Triage (Try a borrower) =====================
+# ---------------- 8) Client Credit Check ----------------
 elif page == "Client Credit Check":
     big_title("Client Credit Check — Enter borrower details")
-    st.caption("Type the borrower’s details to get a GO / CAUTION / STOP verdict with a risk gauge.")
+    st.caption("Fill in the boxes below to get a GO / CAUTION / STOP verdict with a risk gauge.")
 
-    # Ensure a model exists (use the one trained on Modeling & Metrics or build quickly here)
+    # Ensure a model exists (reuse from Modeling page or build quick)
     if "__model_cols__" not in st.session_state:
         y_all = df_full["SeriousDlqin2yrs"].astype(int)
         X_cols_all = [c for c in df_full.columns if c != "SeriousDlqin2yrs" and pd.api.types.is_numeric_dtype(df_full[c])]
@@ -590,85 +669,77 @@ elif page == "Client Credit Check":
         st.session_state["__scaler_scale__"] = sc.scale_.tolist()
         st.session_state["__coef__"] = lr.coef_[0].tolist()
         st.session_state["__intercept__"] = float(lr.intercept_[0])
-        st.session_state["__default_threshold__"] = 0.50
 
     model_cols = st.session_state["__model_cols__"]
     scaler_mean = np.array(st.session_state["__scaler_mean__"])
     scaler_scale = np.array(st.session_state["__scaler_scale__"])
     coef = np.array(st.session_state["__coef__"])
-    intercept = st.session_state["__intercept__"]
-    default_thr = st.session_state.get("__default_threshold__", 0.50)
+    intercept = float(st.session_state["__intercept__"])
 
-    # Build inputs
-    section_title("Enter borrower details")
-    col1, col2, col3 = st.columns(3)
-    # sensible ranges from data
-    def rng(col, default_q=(0.1, 0.9), step=1):
+    def rng(col, qlo=0.10, qhi=0.90, fallback_max=100):
         if col not in df_full.columns or df_full[col].dropna().empty:
-            return (0, 100, (20, 80))
+            return (0, fallback_max, int(fallback_max/2))
         s = df_full[col].dropna()
-        lo, hi = int(s.quantile(default_q[0])), int(s.quantile(default_q[1]))
-        return (max(0, int(s.min())), int(max(s.max(), lo+1)), (lo, hi))
+        lo = int(s.quantile(qlo)); hi = int(max(s.quantile(qhi), lo+1))
+        return (int(max(0, s.min())), int(max(s.max(), hi)), int((lo+hi)//2))
 
-    a_min,a_max,(a_lo,a_hi) = rng("age"); m_min,m_max,(m_lo,m_hi) = rng("MonthlyIncome")
-    u_min,u_max,(u_lo,u_hi) = rng("RevolvingUtilizationOfUnsecuredLines"); d_min,d_max,(d_lo,d_hi) = rng("DebtRatio")
-    l_min,l_max,(l_lo,l_hi) = rng("NumberOfOpenCreditLinesAndLoans"); dep_min,dep_max,(dep_lo,dep_hi) = rng("NumberOfDependents")
-    t30 = int(df_full.get("NumberOfTime30-59DaysPastDueNotWorse", pd.Series([0])).max())
-    t60 = int(df_full.get("NumberOfTime60-89DaysPastDueNotWorse", pd.Series([0])).max())
-    t90 = int(df_full.get("NumberOfTimes90DaysLate", pd.Series([0])).max())
+    a_min,a_max,a_def = rng("age", 0.10, 0.90, 100)
+    m_min,m_max,m_def = rng("MonthlyIncome", 0.10, 0.90, 50000)
+    u_min,u_max,u_def = rng("RevolvingUtilizationOfUnsecuredLines", 0.10, 0.90, 200)
+    d_min,d_max,d_def = rng("DebtRatio", 0.10, 0.90, 300)
+    l_min,l_max,l_def = rng("NumberOfOpenCreditLinesAndLoans", 0.10, 0.90, 20)
+    dep_min,dep_max,dep_def = rng("NumberOfDependents", 0.10, 0.90, 6)
+    t30_max = int(df_full.get("NumberOfTime30-59DaysPastDueNotWorse", pd.Series([3])).max())
+    t60_max = int(df_full.get("NumberOfTime60-89DaysPastDueNotWorse", pd.Series([2])).max())
+    t90_max = int(df_full.get("NumberOfTimes90DaysLate", pd.Series([2])).max())
 
+    col1, col2, col3 = st.columns(3)
     with col1:
-        age = st.number_input("Age", min_value=a_min, max_value=a_max, value=int((a_lo+a_hi)//2), step=1)
-        income = st.number_input("Monthly Income", min_value=m_min, max_value=m_max, value=int((m_lo+m_hi)//2), step=1)
-        util = st.number_input("Card/Line Utilization", min_value=u_min, max_value=max(u_max,1), value=int((u_lo+u_hi)//2), step=1)
+        age = st.number_input("Age", min_value=a_min, max_value=a_max, value=a_def, step=1)
+        income = st.number_input("Monthly Income", min_value=m_min, max_value=m_max, value=m_def, step=1)
+        util = st.number_input("Card/Line Utilization", min_value=u_min, max_value=max(u_max,1), value=u_def, step=1)
     with col2:
-        dratio = st.number_input("Debt Ratio", min_value=d_min, max_value=max(d_max,1), value=int((d_lo+d_hi)//2), step=1)
-        open_lines = st.number_input("Open Credit Lines/Loans", min_value=l_min, max_value=l_max, value=int((l_lo+l_hi)//2), step=1)
-        dependents = st.number_input("Dependents", min_value=dep_min, max_value=max(dep_max,0), value=int((dep_lo+dep_hi)//2), step=1)
+        dratio = st.number_input("Debt Ratio", min_value=d_min, max_value=max(d_max,1), value=d_def, step=1)
+        open_lines = st.number_input("Open Credit Lines/Loans", min_value=l_min, max_value=l_max, value=l_def, step=1)
+        dependents = st.number_input("Dependents", min_value=dep_min, max_value=max(dep_max,0), value=dep_def, step=1)
     with col3:
-        late30 = st.number_input("Times 30–59 Days Late", min_value=0, max_value=max(1,t30), value=0, step=1)
-        late60 = st.number_input("Times 60–89 Days Late", min_value=0, max_value=max(1,t60), value=0, step=1)
-        late90 = st.number_input("Times 90+ Days Late", min_value=0, max_value=max(1,t90), value=0, step=1)
+        late30 = st.number_input("Times 30–59 Days Late", min_value=0, max_value=max(1,t30_max), value=0, step=1)
+        late60 = st.number_input("Times 60–89 Days Late", min_value=0, max_value=max(1,t60_max), value=0, step=1)
+        late90 = st.number_input("Times 90+ Days Late", min_value=0, max_value=max(1,t90_max), value=0, step=1)
 
-    # Construct row matching model columns
-    row = pd.Series(0.0, index=model_cols, dtype=float)
-    valmap = {
-        "age": float(age),
-        "MonthlyIncome": float(income),
-        "RevolvingUtilizationOfUnsecuredLines": float(util),
-        "DebtRatio": float(dratio),
-        "NumberOfOpenCreditLinesAndLoans": float(open_lines),
-        "NumberOfDependents": float(dependents),
-        "NumberOfTime30-59DaysPastDueNotWorse": float(late30),
-        "NumberOfTime60-89DaysPastDueNotWorse": float(late60),
-        "NumberOfTimes90DaysLate": float(late90)
-    }
-    # fill with column medians for anything not provided
     med = df_full[model_cols].median(numeric_only=True)
     row = med.reindex(model_cols).astype(float)
-    for k,v in valmap.items():
-        if k in row.index: row[k] = v
-    X_row = row.values.reshape(1, -1)
-    X_row_sc = (X_row - scaler_mean) / np.where(scaler_scale==0, 1.0, scaler_scale)
-    # logistic score
-    logit = float(np.dot(X_row_sc, coef) + intercept)
+    for k,v in {
+        "age": age, "MonthlyIncome": income, "RevolvingUtilizationOfUnsecuredLines": util,
+        "DebtRatio": dratio, "NumberOfOpenCreditLinesAndLoans": open_lines,
+        "NumberOfDependents": dependents, "NumberOfTime30-59DaysPastDueNotWorse": late30,
+        "NumberOfTime60-89DaysPastDueNotWorse": late60, "NumberOfTimes90DaysLate": late90
+    }.items():
+        if k in row.index: row[k] = float(v)
+
+    X = row.values.reshape(1,-1)
+    Xs = (X - scaler_mean) / np.where(scaler_scale==0, 1.0, scaler_scale)
+    logit = float(np.dot(Xs, coef) + intercept)
     prob = float(1/(1+np.exp(-logit)))
 
-    # verdict bands (you can tweak)
-    warn_low = st.slider("Green/Amber cutoff", 0.05, 0.50, 0.20, step=0.01)
-    warn_high = st.slider("Amber/Red cutoff", warn_low, 0.95, 0.50, step=0.01)
+    st.caption("Verdict thresholds (adjust to policy)")
+    cA, cB = st.columns(2)
+    green_cut = cA.slider("GO if probability < ", 0.02, 0.50, 0.20, step=0.01)
+    red_cut   = cB.slider("STOP if probability ≥", green_cut, 0.95, 0.50, step=0.01)
 
-    if prob < warn_low:
-        st.success(f"GO — predicted default probability {prob:.2%} (below {warn_low:.0%}).")
-        verdict_color = "green"
-    elif prob < warn_high:
-        st.warning(f"CAUTION — predicted default probability {prob:.2%} (between {warn_low:.0%} and {warn_high:.0%}).")
-        verdict_color = "orange"
+    if prob < green_cut:
+        st.success(f"GO — predicted default probability {prob:.2%}.")
+        st.markdown('<div class="note">Guidance: suitable for standard terms and amounts.</div>', unsafe_allow_html=True)
+        gauge_color = "green"
+    elif prob < red_cut:
+        st.warning(f"CAUTION — predicted default probability {prob:.2%}.")
+        st.markdown('<div class="note">Guidance: consider a <b>smaller amount</b>, shorter term, or extra checks.</div>', unsafe_allow_html=True)
+        gauge_color = "orange"
     else:
-        st.error(f"STOP — predicted default probability {prob:.2%} (at or above {warn_high:.0%}).")
-        verdict_color = "red"
+        st.error(f"STOP — predicted default probability {prob:.2%}.")
+        st.markdown('<div class="note">Guidance: lending not recommended at this time.</div>', unsafe_allow_html=True)
+        gauge_color = "red"
 
-    # Risk gauge
     section_title("Risk gauge")
     gauge = go.Figure(go.Indicator(
         mode="gauge+number",
@@ -676,22 +747,20 @@ elif page == "Client Credit Check":
         number={'suffix': "%"},
         gauge={
             'axis': {'range': [0, 100]},
-            'bar': {'color': verdict_color},
+            'bar': {'color': gauge_color},
             'steps': [
-                {'range': [0, warn_low*100], 'color': '#d1fae5'},     # light green
-                {'range': [warn_low*100, warn_high*100], 'color': '#fef3c7'}, # light amber
-                {'range': [warn_high*100, 100], 'color': '#fee2e2'}   # light red
+                {'range': [0, green_cut*100], 'color': '#d1fae5'},
+                {'range': [green_cut*100, red_cut*100], 'color': '#fef3c7'},
+                {'range': [red_cut*100, 100], 'color': '#fee2e2'},
             ]
         }
     ))
     gauge.update_layout(height=260, margin=dict(l=10,r=10,t=10,b=10))
     st.plotly_chart(gauge, use_container_width=True)
 
-# ===================== 9) Saved Figures =====================
+# ---------------- 9) Saved Figures ----------------
 elif page == "Saved Figures":
-    # Robust viewer for reports/figures images
     from PIL import Image, UnidentifiedImageError
-
     big_title("Saved Figures")
 
     def load_image_safe(path: str):
@@ -710,8 +779,7 @@ elif page == "Saved Figures":
 
     patterns = ["reports/figures/*.png", "reports/figures/*.jpg", "reports/figures/*.jpeg"]
     files = []
-    for pat in patterns:
-        files.extend(sorted(glob.glob(pat)))
+    for pat in patterns: files.extend(sorted(glob.glob(pat)))
 
     if not files:
         st.markdown('<div class="block note">No images found in reports/figures.</div>', unsafe_allow_html=True)
@@ -748,7 +816,7 @@ elif page == "Saved Figures":
                     except Exception:
                         pass
 
-# ===================== 10) Data Quality =====================
+# ---------------- 10) Data Quality ----------------
 elif page == "Data Quality":
     big_title("Data Quality")
     section_title("Missing values by column")
@@ -765,12 +833,12 @@ elif page == "Data Quality":
     if "MonthlyIncome" in show_df.columns: show_df["MonthlyIncome"] = show_df["MonthlyIncome"].astype("Int64")
     st.dataframe(show_df.describe(include="all").transpose(), use_container_width=True)
 
-# ===================== 11) Summary & Conclusion =====================
+# ---------------- 11) Summary & Conclusion ----------------
 elif page == "Summary & Conclusion":
     big_title("Summary & Conclusion")
-    st.markdown("The borrowers most likely to default tend to combine **very high card/line utilization**, **any past-due history**, **very high debt ratio**, **lower income**, **younger age**, **many open lines/loans**, and **3+ dependents**.")
+    st.markdown("Borrowers most likely to default tend to combine **very high card/line utilization**, **any past-due history**, **very high debt ratio**, **lower income**, **younger age**, **many open lines/loans**, and **3+ dependents**.")
 
-    # Ensure we have scores and buckets (reuse Risk Buckets logic)
+    # Ensure we have scores for the table
     if "__y_proba__" not in st.session_state:
         y_all = df_full["SeriousDlqin2yrs"].astype(int)
         X_cols_all = [c for c in df_full.columns if c != "SeriousDlqin2yrs" and pd.api.types.is_numeric_dtype(df_full[c])]
@@ -800,7 +868,6 @@ elif page == "Summary & Conclusion":
                 Avg_Open_Loans=("NumberOfOpenCreditLinesAndLoans","mean"),
                 Avg_Dependents=("NumberOfDependents","mean"))
            .reindex(list("ABCD")))
-    # clean display
     tbl["Avg_Default_Prob"] = (100*tbl["Avg_Default_Prob"]).round(1)
     for c in ["Avg_Age","Avg_Income","Avg_Open_Loans","Avg_Dependents"]:
         if c in tbl.columns: tbl[c] = tbl[c].round(0)
@@ -832,8 +899,8 @@ elif page == "Summary & Conclusion":
     section_title("How to use this")
     st.markdown(
         "- **Bucket A**: generally safe; standard terms.\n"
-        "- **Bucket B**: near-safe; consider modest limits.\n"
+        "- **Bucket B**: near-safe; modest limits.\n"
         "- **Bucket C**: caution; tighter limits or extra checks.\n"
         "- **Bucket D**: high risk; small loans only if needed, or decline.\n"
-        "Use **Lending Triage (Try a borrower)** to test individual cases with a quick GO/CAUTION/STOP verdict."
+        "For a single case, use **Client Credit Check** (left menu) for a quick GO / CAUTION / STOP verdict."
     )
