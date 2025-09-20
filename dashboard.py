@@ -677,111 +677,141 @@ elif page == "Client Credit Check":
     coef = np.array(st.session_state["__coef__"])
     intercept = float(st.session_state["__intercept__"])
 
-    def rng(col, qlo=0.10, qhi=0.90, fallback_max=100):
+    # ---------- Safe helpers ----------
+    def data_range(col, qlo=0.10, qhi=0.90, fallback_max=100, hard_min=0):
+        """Return (lo, hi, default) with enforced ordering and sensible gaps."""
         if col not in df_full.columns or df_full[col].dropna().empty:
-            return (0, fallback_max, int(fallback_max/2))
-        s = df_full[col].dropna()
-        lo = int(s.quantile(qlo)); hi = int(max(s.quantile(qhi), lo+1))
-        return (int(max(0, s.min())), int(max(s.max(), hi)), int((lo+hi)//2))
+            lo, hi = hard_min, max(hard_min + 10, fallback_max)
+            default = (lo + hi) // 2
+            return int(lo), int(hi), int(default)
+        s = pd.to_numeric(df_full[col], errors="coerce").dropna()
+        # robust quantiles (avoid inf/nan)
+        ql = float(np.nanquantile(s, qlo))
+        qh = float(np.nanquantile(s, qhi))
+        lo = int(min(ql, qh, s.min()))
+        hi = int(max(ql, qh, s.max()))
+        lo = max(int(hard_min), lo)
+        if hi <= lo:
+            hi = lo + 1  # ensure valid range
+        default = int((lo + hi) // 2)
+        return lo, hi, default
 
-    a_min,a_max,a_def = rng("age", 0.10, 0.90, 100)
-    m_min,m_max,m_def = rng("MonthlyIncome", 0.10, 0.90, 50000)
-    u_min,u_max,u_def = rng("RevolvingUtilizationOfUnsecuredLines", 0.10, 0.90, 200)
-    d_min,d_max,d_def = rng("DebtRatio", 0.10, 0.90, 300)
-    l_min,l_max,l_def = rng("NumberOfOpenCreditLinesAndLoans", 0.10, 0.90, 20)
-    dep_min,dep_max,dep_def = rng("NumberOfDependents", 0.10, 0.90, 6)
-    t30_max = int(df_full.get("NumberOfTime30-59DaysPastDueNotWorse", pd.Series([3])).max())
-    t60_max = int(df_full.get("NumberOfTime60-89DaysPastDueNotWorse", pd.Series([2])).max())
-    t90_max = int(df_full.get("NumberOfTimes90DaysLate", pd.Series([2])).max())
+    def clamp(val, lo, hi):
+        return max(lo, min(hi, val))
 
+    # Pull ranges safely
+    a_min, a_max, a_def   = data_range("age", fallback_max=100, hard_min=18)
+    m_min, m_max, m_def   = data_range("MonthlyIncome", fallback_max=100000, hard_min=0)
+    u_min, u_max, u_def   = data_range("RevolvingUtilizationOfUnsecuredLines", fallback_max=200, hard_min=0)
+    d_min, d_max, d_def   = data_range("DebtRatio", fallback_max=300, hard_min=0)
+    l_min, l_max, l_def   = data_range("NumberOfOpenCreditLinesAndLoans", fallback_max=20, hard_min=0)
+    dep_min, dep_max, dep_def = data_range("NumberOfDependents", fallback_max=6, hard_min=0)
+
+    # Late counts – always allow at least 0–3
+    t30_max = int(max(3, float(df_full.get("NumberOfTime30-59DaysPastDueNotWorse", pd.Series([0])).max() or 0)))
+    t60_max = int(max(2, float(df_full.get("NumberOfTime60-89DaysPastDueNotWorse", pd.Series([0])).max() or 0)))
+    t90_max = int(max(2, float(df_full.get("NumberOfTimes90DaysLate", pd.Series([0])).max() or 0)))
+
+    # ---------- UI ----------
     col1, col2, col3 = st.columns(3)
-    with col1:
-        age = st.number_input("Age", min_value=a_min, max_value=a_max, value=a_def, step=1)
-        income = st.number_input("Monthly Income", min_value=m_min, max_value=m_max, value=m_def, step=1)
 
-        # -------- Card/Line Utilization with help + calculator --------
+    # Left column
+    with col1:
+        age = st.number_input("Age", min_value=a_min, max_value=a_max, value=clamp(a_def, a_min, a_max), step=1, key="cc_age")
+        income = st.number_input("Monthly Income", min_value=m_min, max_value=m_max, value=clamp(m_def, m_min, m_max), step=100, key="cc_inc")
+
         st.markdown("**Card/Line Utilization**")
-        with st.expander("What is this? (tap to help)"):
+        with st.expander("What is this? (tap to help)", expanded=False):
             st.markdown("""
 **Card/Line Utilization = Total revolving balances ÷ Total credit limits**
 
 - Revolving balances: current balances on credit cards/lines of credit.  
-- Credit limits: total available limits across those same cards/lines.  
+- Credit limits: total available credit across those same cards/lines.  
 
-**Example:** balances 60,000 and limits 200,000 ⇒ 60,000 / 200,000 = **0.30 (30%)**.  
-Higher utilization (closer to 1.0 or 100%) usually means higher risk.
-            """)
-            # Quick calculator
-            rev_bal = st.number_input("Total revolving balances", min_value=0, value=60000, step=1000, key="rev_bal_calc")
-            tot_lim = st.number_input("Total credit limits", min_value=1, value=200000, step=1000, key="tot_lim_calc")
+**Example:** balances 60,000 and limits 200,000 ⇒ 60,000 / 200,000 = **0.30 (30%)**.
+Higher utilization (closer to 1.0 = 100%) usually means higher risk.
+""")
+            rev_bal = st.number_input("Total revolving balances", min_value=0, value=60000, step=1000, key="cc_revbal")
+            tot_lim = st.number_input("Total credit limits",   min_value=1, value=200000, step=1000, key="cc_totlim")
             calc_util = round(rev_bal / tot_lim, 2)
-            st.caption(f"Calculated Utilization: **{calc_util:.2f}**  (use this below if helpful)")
+            st.caption(f"Calculated Utilization: **{calc_util:.2f}** — copy below if helpful.")
 
+        # allow >1.0 because the raw data sometimes has outliers
         util = st.number_input(
-            "Enter Utilization (e.g., 0.30 for 30%)",
-            min_value=0.0,
-            max_value=5.0,         # allow >1.0 for odd data
-            value=float(calc_util),
-            step=0.01,
+            "Enter Utilization (e.g., 0.30 = 30%)",
+            min_value=0.0, max_value=max(5.0, float(u_max)),
+            value=float(clamp(calc_util if np.isfinite(calc_util) else 0.3, 0.0, max(5.0, float(u_max)))),
+            step=0.01, key="cc_util",
             help="Utilization = total revolving balances ÷ total credit limits"
         )
 
+    # Middle column
     with col2:
-        # -------- Debt Ratio with help + calculator --------
         st.markdown("**Debt Ratio**")
-        with st.expander("What is this? (tap to help)"):
+        with st.expander("What is this? (tap to help)", expanded=False):
             st.markdown("""
 **Debt Ratio = Total monthly debt payments ÷ Gross monthly income**
 
-- Monthly debt payments: mortgage/rent (per policy), car/student/personal loans, minimum card payments, other finance plans.  
+- Monthly debt payments: mortgage/rent (per policy), car/student/personal loans,
+  minimum card payments, other finance plans.  
 - Gross income: before-tax monthly income.
 
 **Example:** 12,000 / 40,000 = **0.30 (30%)**.
-            """)
-
-            # Quick calculator
-            m_pay = st.number_input("Monthly debt payments", min_value=0, value=12000, step=500, key="m_pay_calc")
-            g_inc = st.number_input("Gross monthly income", min_value=1, value=40000, step=500, key="g_inc_calc")
+""")
+            m_pay = st.number_input("Monthly debt payments", min_value=0, value=12000, step=500, key="cc_mpay")
+            g_inc = st.number_input("Gross monthly income",  min_value=1, value=40000, step=500, key="cc_ginc")
             calc_dr = round(m_pay / g_inc, 2)
-            st.caption(f"Calculated Debt Ratio: **{calc_dr:.2f}**  (use this below if helpful)")
+            st.caption(f"Calculated Debt Ratio: **{calc_dr:.2f}** — copy below if helpful.")
 
         dratio = st.number_input(
-            "Enter Debt Ratio (e.g., 0.30 for 30%)",
-            min_value=0.0,
-            max_value=max(d_max,1),
-            value=float(calc_dr),
-            step=0.01,
+            "Enter Debt Ratio (e.g., 0.30 = 30%)",
+            min_value=0.0, max_value=max(1.0, float(d_max)),
+            value=float(clamp(calc_dr if np.isfinite(calc_dr) else 0.3, 0.0, max(1.0, float(d_max)))),
+            step=0.01, key="cc_dratio",
             help="Debt Ratio = total monthly debt payments ÷ gross monthly income"
         )
 
-        open_lines = st.number_input("Open Credit Lines/Loans", min_value=l_min, max_value=l_max, value=l_def, step=1)
-        dependents = st.number_input("Dependents", min_value=dep_min, max_value=max(dep_max,0), value=dep_def, step=1)
+        open_lines = st.number_input("Open Credit Lines/Loans",
+                                     min_value=l_min, max_value=l_max,
+                                     value=clamp(l_def, l_min, l_max), step=1, key="cc_open")
+        dependents = st.number_input("Dependents",
+                                     min_value=dep_min, max_value=max(dep_max, dep_min+1),
+                                     value=clamp(dep_def, dep_min, max(dep_max, dep_min+1)),
+                                     step=1, key="cc_dep")
 
+    # Right column
     with col3:
-        late30 = st.number_input("Times 30–59 Days Late", min_value=0, max_value=max(1,t30_max), value=0, step=1)
-        late60 = st.number_input("Times 60–89 Days Late", min_value=0, max_value=max(1,t60_max), value=0, step=1)
-        late90 = st.number_input("Times 90+ Days Late", min_value=0, max_value=max(1,t90_max), value=0, step=1)
+        late30 = st.number_input("Times 30–59 Days Late", min_value=0, max_value=max(1, t30_max), value=0, step=1, key="cc_30")
+        late60 = st.number_input("Times 60–89 Days Late", min_value=0, max_value=max(1, t60_max), value=0, step=1, key="cc_60")
+        late90 = st.number_input("Times 90+ Days Late",   min_value=0, max_value=max(1, t90_max), value=0, step=1, key="cc_90")
 
-    # Build feature row using medians then overwrite with inputs
+    # ---------- Score the case ----------
     med = df_full[model_cols].median(numeric_only=True)
     row = med.reindex(model_cols).astype(float)
-    for k,v in {
-        "age": age, "MonthlyIncome": income, "RevolvingUtilizationOfUnsecuredLines": util,
-        "DebtRatio": dratio, "NumberOfOpenCreditLinesAndLoans": open_lines,
-        "NumberOfDependents": dependents, "NumberOfTime30-59DaysPastDueNotWorse": late30,
-        "NumberOfTime60-89DaysPastDueNotWorse": late60, "NumberOfTimes90DaysLate": late90
+    for k, v in {
+        "age": age,
+        "MonthlyIncome": income,
+        "RevolvingUtilizationOfUnsecuredLines": util,
+        "DebtRatio": dratio,
+        "NumberOfOpenCreditLinesAndLoans": open_lines,
+        "NumberOfDependents": dependents,
+        "NumberOfTime30-59DaysPastDueNotWorse": late30,
+        "NumberOfTime60-89DaysPastDueNotWorse": late60,
+        "NumberOfTimes90DaysLate": late90,
     }.items():
-        if k in row.index: row[k] = float(v)
+        if k in row.index:
+            row[k] = float(v)
 
-    X = row.values.reshape(1,-1)
-    Xs = (X - scaler_mean) / np.where(scaler_scale==0, 1.0, scaler_scale)
+    X = row.values.reshape(1, -1)
+    Xs = (X - scaler_mean) / np.where(scaler_scale == 0, 1.0, scaler_scale)
     logit = float(np.dot(Xs, coef) + intercept)
-    prob = float(1/(1+np.exp(-logit)))
+    prob = float(1 / (1 + np.exp(-logit)))
 
-    st.caption("Verdict thresholds (adjust to policy)")
+    # Thresholds and verdict
+    section_title("Verdict thresholds (adjust to policy)")
     cA, cB = st.columns(2)
-    green_cut = cA.slider("GO if probability < ", 0.02, 0.50, 0.20, step=0.01)
-    red_cut   = cB.slider("STOP if probability ≥", green_cut, 0.95, 0.50, step=0.01)
+    green_cut = cA.slider("GO if probability < ", 0.02, 0.50, 0.20, step=0.01, key="cc_green")
+    red_cut   = cB.slider("STOP if probability ≥", green_cut, 0.95, 0.50, step=0.01, key="cc_red")
 
     if prob < green_cut:
         st.success(f"GO — predicted default probability {prob:.2%}.")
@@ -789,30 +819,32 @@ Higher utilization (closer to 1.0 or 100%) usually means higher risk.
         gauge_color = "green"
     elif prob < red_cut:
         st.warning(f"CAUTION — predicted default probability {prob:.2%}.")
-        st.markdown('<div class="note">Guidance: consider a <b>smaller amount</b>, shorter term, or extra checks.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="note">Guidance: consider a smaller amount, shorter term, or extra checks.</div>', unsafe_allow_html=True)
         gauge_color = "orange"
     else:
         st.error(f"STOP — predicted default probability {prob:.2%}.")
         st.markdown('<div class="note">Guidance: lending not recommended at this time.</div>', unsafe_allow_html=True)
         gauge_color = "red"
 
+    # Gauge
     section_title("Risk gauge")
     gauge = go.Figure(go.Indicator(
         mode="gauge+number",
-        value=prob*100,
-        number={'suffix': "%"},
+        value=prob * 100,
+        number={"suffix": "%"},
         gauge={
-            'axis': {'range': [0, 100]},
-            'bar': {'color': gauge_color},
-            'steps': [
-                {'range': [0, green_cut*100], 'color': '#d1fae5'},
-                {'range': [green_cut*100, red_cut*100], 'color': '#fef3c7'},
-                {'range': [red_cut*100, 100], 'color': '#fee2e2'},
-            ]
-        }
+            "axis": {"range": [0, 100]},
+            "bar": {"color": gauge_color},
+            "steps": [
+                {"range": [0, green_cut * 100], "color": "#d1fae5"},
+                {"range": [green_cut * 100, red_cut * 100], "color": "#fef3c7"},
+                {"range": [red_cut * 100, 100], "color": "#fee2e2"},
+            ],
+        },
     ))
-    gauge.update_layout(height=260, margin=dict(l=10,r=10,t=10,b=10))
+    gauge.update_layout(height=260, margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(gauge, use_container_width=True)
+
 
 # ---------------- 9) Saved Figures ----------------
 elif page == "Saved Figures":
