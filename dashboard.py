@@ -1,546 +1,368 @@
 # dashboard.py
 # Streamlit dashboard for the Loan Default Exam Project
-# - Teal color scheme with boxed headers
-# - Robust image rendering (read bytes) to avoid TypeError on cloud
-# - Same analysis logic you had, with gentle polish
+# - One-file replacement
+# - Consistent teal title boxes (big + section)
+# - Live Plotly charts (no missing PNGs)
+# - Robust CSV discovery & dirty-data handling
+# - Works locally and on Streamlit Cloud
 
 from __future__ import annotations
 
 import os
 import glob
-import textwrap
-from typing import Optional
+from typing import Optional, List
 
 import numpy as np
 import pandas as pd
 import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
 
-# ----------------- MUST BE FIRST STREAMLIT CALL -----------------
-st.set_page_config(page_title="Loan Default Prediction — Dashboard", layout="wide")
-# ----------------------------------------------------------------
+# ===============================
+# Page setup
+# ===============================
+st.set_page_config(page_title="Loan Default — Dashboard", layout="wide")
 
-# ===================== THEME & HEADER HELPERS ====================
-TEAL_MAIN  = "#0F766E"  # dark teal (page header band)
-TEAL_LIGHT = "#14B8A6"  # lighter teal (section band)
-INK        = "#0F172A"  # body text (reserved if needed)
+# ===============================
+# Styles (title boxes)
+# ===============================
+st.markdown("""
+<style>
+:root {
+  --teal: #007c82;           /* main teal */
+  --teal-light: #e6f6f7;     /* light bg tint */
+  --ink: #0f172a;            /* text */
+  --muted: #475569;
+  --radius: 16px;
+  --shadow: 0 6px 18px rgba(0,0,0,0.08);
+}
 
-def h1(title: str) -> None:
-    """Biggest title (H1). Uses Streamlit's native title size."""
-    st.title(title)
+.big-title {
+  background: var(--teal);
+  color: #ffffff !important;
+  padding: 18px 22px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  margin: 8px 0 18px 0;
+}
 
-def page_band(text: str) -> None:
-    """Medium-sized colored band for the current page name (Overview, EDA, ...)."""
-    st.markdown(
-        f"""
-        <div style="
-            background:{TEAL_MAIN};
-            color:white;
-            padding:10px 16px;
-            border-radius:12px;
-            font-weight:700;
-            font-size:1.15rem;   /* smaller than H1, bigger than section */
-            letter-spacing:.2px;
-            margin:.25rem 0 1rem;">
-            {text}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+.section-title {
+  background: linear-gradient(0deg, var(--teal-light), var(--teal-light));
+  border: 2px solid var(--teal);
+  color: var(--ink);
+  padding: 10px 14px;
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 8px 0 10px 0;
+}
 
-def section_band(text: str) -> None:
-    """Small colored band for sub-sections within a page (e.g., 'Figures')."""
-    st.markdown(
-        f"""
-        <div style="
-            background:{TEAL_LIGHT};
-            color:white;
-            padding:8px 14px;
-            border-radius:10px;
-            font-weight:700;
-            font-size:1.0rem;    /* smaller than page band */
-            letter-spacing:.1px;
-            margin:1rem 0 .6rem;">
-            {text}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-# ================================================================
+.small-muted {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
 
-# ---- Robust image helper (avoid PIL/type issues on cloud) ----
-def show_image(path: str, caption: str | None = None) -> None:
-    """Safely display an image file by reading bytes first."""
-    try:
-        with open(path, "rb") as f:
-            data = f.read()
-        st.image(data, caption=caption, use_container_width=True)
-    except Exception as e:
-        st.warning(f"Could not display {os.path.basename(path)} ({e}).")
+.block {
+  background: #ffffff;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px;
+}
 
-# ---- Paths ----
-FIG_DIR = "reports/figures"
-EXPORTS_DIR = "exports"
+hr.separator {
+  border: none;
+  height: 1px;
+  background: #e2e8f0;
+  margin: 18px 0;
+}
+</style>
+""", unsafe_allow_html=True)
 
-# ---------- small utils ----------
-def exists(p: str) -> bool:
-    return os.path.exists(p)
+st.markdown('<div class="big-title">Loan Default — Interactive Dashboard</div>', unsafe_allow_html=True)
+st.caption("Live charts, robust to cloud quirks. Uses Plotly for fast, reliable rendering.")
+
+# ===============================
+# Helpers & data loading
+# ===============================
+
+REQUIRED_COLS = {
+    "SeriousDlqin2yrs",  # target
+    "RevolvingUtilizationOfUnsecuredLines",
+    "age",
+    "NumberOfTime30-59DaysPastDueNotWorse",
+    "DebtRatio",
+    "MonthlyIncome",
+    "NumberOfOpenCreditLinesAndLoans",
+    "NumberOfTimes90DaysLate",
+    "NumberRealEstateLoansOrLines",
+    "NumberOfTime60-89DaysPastDueNotWorse",
+    "NumberOfDependents",
+}
 
 @st.cache_data(show_spinner=False)
-def safe_read_csv(path: str) -> Optional[pd.DataFrame]:
-    try:
-        if exists(path):
-            return pd.read_csv(path)
-    except Exception:
-        return None
-    return None
-
-def show_table(df: Optional[pd.DataFrame], caption: str | None = None, height: int = 360):
-    if df is None or df.empty:
-        st.info("No data found for this section.")
-        return
-    st.dataframe(df, height=height)
-    if caption:
-        st.caption(caption)
-
-def find_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
-
-def safe_div(n: float, d: float) -> float:
-    return float(n) / float(d) if d else np.nan
-
-def num(x: float | int | None, d: int = 2) -> str:
-    if x is None or pd.isna(x): return "—"
-    try:
-        return f"{float(x):.{d}f}"
-    except Exception:
-        return str(x)
-
-def pct(x: float | int | None, d: int = 1) -> str:
-    if x is None or pd.isna(x): return "—"
-    try:
-        return f"{100.0 * float(x):.{d}f}%"
-    except Exception:
-        return "—"
-
-def ks_statistic(y: np.ndarray, s: np.ndarray) -> float:
-    """Two-sample KS on [0,1] scores."""
-    pos = s[y == 1]
-    neg = s[y == 0]
-    if len(pos) == 0 or len(neg) == 0:
-        return np.nan
-    xp = np.sort(pos)
-    xn = np.sort(neg)
-    grid = np.linspace(0.0, 1.0, 1001)
-    cdf_p = np.searchsorted(xp, grid, side="right") / xp.size
-    cdf_n = np.searchsorted(xn, grid, side="right") / xn.size
-    return float(np.max(np.abs(cdf_p - cdf_n)))
-
-# ---------- sidebar ----------
-st.sidebar.title("Navigation")
-page = st.sidebar.radio(
-    "Go to:",
-    ["Overview", "EDA Gallery", "Model Performance", "Score Explorer", "Executive Summary", "How to run"]
-)
-st.sidebar.divider()
-st.sidebar.markdown("**Files this app expects:**")
-st.sidebar.code(
-    "reports/figures/*.png\n"
-    "reports/key_numbers.csv\n"
-    "exports/model_eval_summary.csv\n"
-    "exports/holdout_predictions.csv\n"
-    "exports/threshold_metrics.csv\n"
-    "exports/score_deciles_logreg.csv\n"
-    "exports/score_deciles_rf.csv",
-    language="text"
-)
-
-# ============================== PAGES ==============================
-if page == "Overview":
-    h1("Loan Default Prediction — Dashboard")
-    page_band("Overview")
-
-    col1, col2, col3 = st.columns(3)
-    key_numbers = safe_read_csv("reports/key_numbers.csv")
-    if key_numbers is not None and not key_numbers.empty:
-        row = key_numbers.iloc[0].to_dict()
-        with col1:
-            st.metric("Total clients", f"{int(row.get('total_clients', 0)):,}")
-        with col2:
-            rr = row.get("late_rate", np.nan)
-            st.metric("Late rate", pct(rr))
-        with col3:
-            med_inc = row.get("median_income_all", np.nan)
-            st.metric("Median income", f"{float(med_inc):,.0f}" if pd.notna(med_inc) else "—")
-
-        pieces = []
-        if "median_income_all" in row:
-            pieces.append(f"Median income in the portfolio sits at **{float(row['median_income_all']):,.0f}**.")
-        if "min_income_all" in row and "max_income_all" in row:
-            pieces.append(
-                f"Reported income ranges from **{float(row['min_income_all']):,.0f}** to **{float(row['max_income_all']):,.0f}**."
-            )
-        if "late_rate" in row:
-            pieces.append(f"Overall late/default rate is **{pct(row['late_rate'])}**.")
-        if "default_rate_no_dependents" in row and "default_rate_with_dependents" in row:
-            nd = pct(row["default_rate_no_dependents"])
-            wd = pct(row["default_rate_with_dependents"])
-            pieces.append(f"Clients **without dependants** show a default rate of **{nd}**, versus **{wd}** with dependants.")
-
-        if pieces:
-            section_band("Summary insight")
-            st.markdown(" ".join(pieces))
-    else:
-        with col1: st.metric("Total clients", "—")
-        with col2: st.metric("Late rate", "—")
-        with col3: st.metric("Median income", "—")
-
-    section_band("What’s here")
-    st.markdown(
-        "- **EDA Gallery**: figures from the analysis.\n"
-        "- **Model Performance**: AUC/AP, thresholds, confusion matrices, lift/gains.\n"
-        "- **Score Explorer**: interact with holdout probabilities.\n"
-        "- **How to run**: simple instructions to reproduce."
-    )
-
-elif page == "EDA Gallery":
-    h1("Loan Default Prediction — Dashboard")
-    page_band("EDA Gallery")
-
-    if not os.path.isdir(FIG_DIR):
-        st.warning(f"Folder not found: `{FIG_DIR}`")
-    else:
-        images = sorted(glob.glob(os.path.join(FIG_DIR, "*.png")))
-        if not images:
-            st.info("No figures found yet. Run `python main.py` to generate them.")
-        else:
-            captions = {}
-            cap_path = os.path.join("reports", "figure_captions.txt")
-            if exists(cap_path):
-                try:
-                    with open(cap_path, "r", encoding="utf-8") as f:
-                        for line in f:
-                            if ": " in line and not line.strip().startswith("==="):
-                                k, v = line.strip().split(": ", 1)
-                                captions[k] = v
-                except Exception:
-                    pass
-
-            section_band("Figures")
-            for img in images:
-                fname = os.path.basename(img)
-                st.subheader(fname)
-                cap = captions.get(fname, "")
-                if cap:
-                    st.caption(cap)
-                show_image(img)  # robust display
-                st.divider()
-
-elif page == "Model Performance":
-    h1("Loan Default Prediction — Dashboard")
-    page_band("Model Performance")
-
-    perf = safe_read_csv(os.path.join(EXPORTS_DIR, "model_eval_summary.csv"))
-    holdout = safe_read_csv(os.path.join(EXPORTS_DIR, "holdout_predictions.csv"))
-    thr_metrics = safe_read_csv(os.path.join(EXPORTS_DIR, "threshold_metrics.csv"))
-
-    base_rate = None
-    if holdout is not None:
-        y_col = find_column(holdout, ["y_true", "target", "SeriousDlqin2yrs"])
-        if y_col:
-            base_rate = float(pd.to_numeric(holdout[y_col], errors="coerce").mean())
-
-    # --- metrics table
-    if perf is not None and not perf.empty:
-        section_band("Holdout metrics")
-        show_table(perf, height=260)
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if "AUC" in perf.columns and "model" in perf.columns:
-                auc_txt = " • ".join(f"{m}: {float(a):.3f}" for m, a in zip(perf["model"], perf["AUC"]))
-                st.success(f"AUC — {auc_txt}")
-        with c2:
-            if "AP" in perf.columns and "model" in perf.columns:
-                ap_txt = " • ".join(f"{m}: {float(a):.3f}" for m, a in zip(perf["model"], perf["AP"]))
-                st.info(f"Average Precision — {ap_txt}")
-
-        msgs = []
-        if "AP" in perf.columns:
-            best_ap_idx = int(perf["AP"].astype(float).idxmax())
-            best_ap_row = perf.iloc[best_ap_idx]
-            best_ap_name = str(best_ap_row.get("model", "Best"))
-            best_ap = float(best_ap_row["AP"])
-            second_ap = float(perf["AP"].nlargest(2).iloc[-1]) if len(perf) >= 2 else np.nan
-            lift_over_base = (best_ap / base_rate) if base_rate else np.nan
-            msgs.append(
-                f"**Ranking by AP:** {best_ap_name} leads with **AP {best_ap:.3f}** "
-                + (f"(next best {second_ap:.3f}). " if pd.notna(second_ap) else ". ")
-                + (f"Given a portfolio base default rate of **{pct(base_rate)}**, the model’s AP represents about **{num(lift_over_base,2)}×** the random baseline." if base_rate else "")
-            )
-        if "AUC" in perf.columns:
-            best_auc_idx = int(perf["AUC"].astype(float).idxmax())
-            best_auc_row = perf.iloc[best_auc_idx]
-            best_auc_name = str(best_auc_row.get("model", "Best"))
-            best_auc = float(best_auc_row["AUC"])
-            msgs.append(f"**Ranking by AUC:** {best_auc_name} shows the strongest overall ranking (**AUC {best_auc:.3f}**).")
-
-        if msgs:
-            section_band("What the metrics say")
-            st.markdown(" ".join(msgs))
-    else:
-        st.info("Run `python main.py` to generate `exports/model_eval_summary.csv`.")
-
-    # --- Figures
-    figs = [
-        ("Confusion — Logistic Regression", "cm_logreg_tuned.png", "cm_logreg.png", "Logistic Regression"),
-        ("Confusion — Random Forest", "cm_rf_tuned.png", "cm_rf.png", "Random Forest"),
-        ("ROC — Logistic Regression", "roc_logreg.png", None, "Logistic Regression"),
-        ("ROC — Random Forest", "roc_rf.png", None, "Random Forest"),
-        ("PR — Logistic Regression", "pr_logreg.png", None, "Logistic Regression"),
-        ("PR — Random Forest", "pr_rf.png", None, "Random Forest"),
-        ("Lift — Logistic Regression", "lift_logreg.png", None, "Logistic Regression"),
-        ("Lift — Random Forest", "lift_rf.png", None, "Random Forest"),
-        ("Gains — Logistic Regression", "gains_logreg.png", None, "Logistic Regression"),
-        ("Gains — Random Forest", "gains_rf.png", None, "Random Forest"),
-        ("Calibration — Logistic Regression", "calibration_logreg.png", None, "Logistic Regression"),
-        ("Permutation importance — LogReg", "pi_logreg.png", None, "Logistic Regression"),
-        ("Permutation importance — RF", "pi_rf.png", None, "Random Forest"),
+def find_dataset() -> Optional[str]:
+    """Find the first CSV that has the expected columns."""
+    candidates_patterns: List[str] = [
+        "data/*.csv",
+        "datasets/*.csv",
+        "*.csv",
+        "input/*.csv",
+        "inputs/*.csv",
     ]
+    found_files: List[str] = []
+    for pat in candidates_patterns:
+        found_files.extend(glob.glob(pat))
 
-    def write_model_paragraph(model_name: str):
-        texts = []
-        if thr_metrics is not None and not thr_metrics.empty:
-            dfm = thr_metrics.copy()
-            if "model" in dfm.columns:
-                dfm = dfm[dfm["model"].astype(str).str.lower() == model_name.lower()]
-            if not dfm.empty:
-                cand_cols = ["F1", "f1", "Recall", "recall"]
-                use_col = next((c for c in cand_cols if c in dfm.columns), None)
-                if use_col:
-                    row = dfm.sort_values(use_col, ascending=False).iloc[0]
-                else:
-                    row = dfm.iloc[0]
-                tp = int(row.get("tp", np.nan)) if pd.notna(row.get("tp", np.nan)) else None
-                fp = int(row.get("fp", np.nan)) if pd.notna(row.get("fp", np.nan)) else None
-                tn = int(row.get("tn", np.nan)) if pd.notna(row.get("tn", np.nan)) else None
-                fn = int(row.get("fn", np.nan)) if pd.notna(row.get("fn", np.nan)) else None
-                prec = row.get("precision") if "precision" in row else row.get("Precision")
-                rec = row.get("recall") if "recall" in row else row.get("Recall")
-                thr = row.get("threshold") if "threshold" in row else None
+    # Prefer common names if multiple are present
+    priority_names = [
+        "data/clean_credit.csv",
+        "data/credit_clean.csv",
+        "data/credit.csv",
+        "cs-training.csv",
+        "train.csv",
+    ]
+    # Move priority files to the front if present
+    ordered = []
+    seen = set()
+    for p in priority_names:
+        if p in found_files and p not in seen:
+            ordered.append(p); seen.add(p)
+    for f in found_files:
+        if f not in seen:
+            ordered.append(f); seen.add(f)
 
-                line = f"At a working cutoff {num(thr,2) if thr is not None else ''} the confusion mix is "
-                parts = []
-                if tp is not None: parts.append(f"TP={tp:,}")
-                if fp is not None: parts.append(f"FP={fp:,}")
-                if tn is not None: parts.append(f"TN={tn:,}")
-                if fn is not None: parts.append(f"FN={fn:,}")
-                if parts: line += ", ".join(parts) + ". "
-                if pd.notna(prec): line += f"Precision **{num(prec,3)}**. "
-                if pd.notna(rec):  line += f"Recall **{num(rec,3)}**. "
-                if base_rate is not None and pd.notna(rec):
-                    line += f"Base default rate is **{pct(base_rate)}**, so recall at this cutoff captures that share of positives."
-                texts.append(line)
+    for path in ordered:
+        try:
+            sample = pd.read_csv(path, nrows=5)
+        except Exception:
+            continue
+        cols = set([c.strip() for c in sample.columns])
+        # sometimes MonthlyIncome may be missing in subsets; accept if target + majority present
+        overlap = len(cols.intersection(REQUIRED_COLS))
+        if "SeriousDlqin2yrs" in cols and overlap >= max(7, int(0.6 * len(REQUIRED_COLS))):
+            return path
+    return None
 
-        for fname in ["score_deciles_logreg.csv", "score_deciles_rf.csv"]:
-            p = os.path.join(EXPORTS_DIR, fname)
-            if exists(p):
-                dec = safe_read_csv(p)
-                if dec is not None and not dec.empty and "decile" in dec.columns:
-                    d1 = dec.sort_values("decile").iloc[0]
-                    cap1 = d1.get("capture_rate", d1.get("cum_capture_rate", np.nan))
-                    if pd.notna(cap1):
-                        texts.append(
-                            f"The top **10%** of scores contain about **{pct(cap1)}** of all defaulters, "
-                            f"supporting targeted review."
-                        )
-                    break
-        if texts:
-            st.markdown("**What this figure tells us:** " + " ".join(texts))
+def _to_numeric(df: pd.DataFrame, exclude: Optional[List[str]]=None) -> pd.DataFrame:
+    """Coerce all columns to numeric where possible, to avoid 'could not convert string...' errors."""
+    exclude = exclude or []
+    for c in df.columns:
+        if c in exclude:
+            continue
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
 
-    section_band("Figures")
-    for title, preferred, fallback, model_name in figs:
-        path = os.path.join(FIG_DIR, preferred)
-        if not exists(path) and fallback:
-            path = os.path.join(FIG_DIR, fallback)
-        if exists(path):
-            st.subheader(title)
-            show_image(path)  # robust display
-            write_model_paragraph(model_name)
-        else:
-            st.caption(f"Missing: {preferred if preferred else ''}")
+@st.cache_data(show_spinner=False)
+def load_data(csv_path: str) -> pd.DataFrame:
+    df = pd.read_csv(csv_path)
+    # Normalize column names (strip)
+    df.columns = [c.strip() for c in df.columns]
+    # Coerce numerics safely (include target)
+    df = _to_numeric(df)
+    # Remove obvious junk rows where target is missing
+    if "SeriousDlqin2yrs" in df.columns:
+        df = df.dropna(subset=["SeriousDlqin2yrs"])
+    # Clip weird ages if needed
+    if "age" in df.columns:
+        df = df[df["age"] > 0]
+    return df
 
-elif page == "Score Explorer":
-    h1("Loan Default Prediction — Dashboard")
-    page_band("Score Explorer (holdout set)")
+def has_cols(df: pd.DataFrame, cols: List[str]) -> bool:
+    return all(c in df.columns for c in cols)
 
-    holdout = safe_read_csv(os.path.join(EXPORTS_DIR, "holdout_predictions.csv"))
-    thr_metrics = safe_read_csv(os.path.join(EXPORTS_DIR, "threshold_metrics.csv"))
+def pct(x: float) -> str:
+    return f"{x*100:.1f}%"
 
-    if holdout is None or holdout.empty:
-        st.info("Run `python main.py` first to create `exports/holdout_predictions.csv`.")
-    else:
-        st.markdown("Use the threshold slider to see how many would be flagged.")
-
-        # Detect probability columns
-        model_map: dict[str, str] = {}
-        if "proba_logreg" in holdout.columns:
-            model_map["Logistic Regression"] = "proba_logreg"
-        if "proba_rf" in holdout.columns:
-            model_map["Random Forest"] = "proba_rf"
-        if not model_map:
-            for c in holdout.columns:
-                if c.lower().startswith("proba"):
-                    model_map[c] = c
-
-        if not model_map:
-            st.error("No probability columns found (expected e.g. 'proba_logreg', 'proba_rf').")
-        else:
-            model_choice = st.selectbox("Model", list(model_map.keys()))
-            prob_col = model_map[model_choice]
-            thr = st.slider("Threshold", min_value=0.0, max_value=1.0, value=0.5, step=0.01)
-
-            scores = pd.to_numeric(holdout[prob_col], errors="coerce").clip(0, 1).to_numpy()
-            flagged = int((scores >= thr).sum())
-            total = int(np.isfinite(scores).sum())
-
-            cA, cB, cC = st.columns(3)
-            with cA:
-                st.metric("Flagged (>= threshold)", f"{flagged:,}")
-                st.caption(f"Out of {total:,} holdout cases")
-            with cB:
-                st.metric("Mean score", num(np.nanmean(scores), 3))
-            with cC:
-                st.metric("Std. dev. score", num(np.nanstd(scores), 3))
-
-            # Histogram of scores
-            hist, edges = np.histogram(scores, bins=30, range=(0, 1))
-            st.bar_chart(pd.DataFrame({"count": hist}, index=pd.Index(edges[:-1], name="p")), height=240)
-
-            # Compute analytics with labels if available
-            y_col = find_column(holdout, ["y_true", "target", "SeriousDlqin2yrs"])
-            if y_col is not None:
-                y = pd.to_numeric(holdout[y_col], errors="coerce").fillna(0).astype(int).to_numpy()
-                preds = (scores >= thr).astype(int)
-
-                tp = int(((preds == 1) & (y == 1)).sum())
-                tn = int(((preds == 0) & (y == 0)).sum())
-                fp = int(((preds == 1) & (y == 0)).sum())
-                fn = int(((preds == 0) & (y == 1)).sum())
-
-                precision = safe_div(tp, tp + fp)
-                recall = safe_div(tp, tp + fn)
-                specificity = safe_div(tn, tn + fp)
-                accuracy = safe_div(tp + tn, len(y))
-                f1 = safe_div(2 * precision * recall, precision + recall)
-
-                section_band("Threshold metrics (on holdout)")
-                m1, m2, m3, m4, m5 = st.columns(5)
-                m1.metric("Precision", num(precision, 3))
-                m2.metric("Recall (TPR)", num(recall, 3))
-                m3.metric("Specificity (TNR)", num(specificity, 3))
-                m4.metric("Accuracy", num(accuracy, 3))
-                m5.metric("F1", num(f1, 3))
-
-                st.caption(f"Confusion @ {thr:.2f}: TP={tp:,}, FP={fp:,}, TN={tn:,}, FN={fn:,}")
-
-                # ---- ANALYSIS
-                base = float(y.mean()) if len(y) else np.nan
-                share_flagged = flagged / total if total else np.nan
-                mean_pos = float(np.nanmean(scores[y == 1])) if (y == 1).any() else np.nan
-                mean_neg = float(np.nanmean(scores[y == 0])) if (y == 0).any() else np.nan
-                ks = ks_statistic(y, scores)
-
-                st.markdown(
-                    textwrap.dedent(
-                        f"""
-                        **What the distribution and cutoff are telling us:**  
-                        • About **{pct(share_flagged)}** of the portfolio would be flagged at this cutoff (**{thr:.2f}**).  
-                        • Portfolio default rate is **{pct(base)}**. Scores average **{num(mean_pos,3)}** for defaulters vs **{num(mean_neg,3)}** for non-defaulters.  
-                        • Separation (KS) is **{num(ks,3)}** — values around 0.3–0.5 indicate useful rank ordering for credit risk.  
-                        • With precision **{num(precision,3)}** and recall **{num(recall,3)}**, this setting balances how many risky cases we catch versus the extra reviews created.
-                        """
-                    ).strip()
-                )
-
-            # Show nearest precomputed row if available
-            if thr_metrics is not None and not thr_metrics.empty and "threshold" in thr_metrics.columns:
-                nearest = thr_metrics.iloc[(thr_metrics["threshold"] - thr).abs().argsort()[:1]]
-                section_band("Nearest precomputed row from threshold_metrics.csv")
-                show_table(nearest, height=120)
-
-            # Top scores table
-            section_band("Top scores")
-            top_n = st.number_input("Show top N scores", min_value=5, max_value=200, value=20, step=5)
-            top_df = pd.DataFrame({"probability": scores}).sort_values("probability", ascending=False).head(int(top_n))
-            show_table(top_df, caption="Highest-risk holdout predictions", height=300)
-
-            st.download_button(
-                "Download holdout with scores (CSV)",
-                data=holdout.to_csv(index=False).encode("utf-8"),
-                file_name="holdout_predictions.csv",
-                mime="text/csv",
-            )
-
-elif page == "Executive Summary":
-    h1("Loan Default Prediction — Dashboard")
-    page_band("Executive Summary")
-
-    md_path = os.path.join("reports", "executive_summary.md")
-    if exists(md_path):
-        with open(md_path, "r", encoding="utf-8") as f:
-            content = f.read().lstrip("\ufeff")
-        lines = content.splitlines()
-        if lines and lines[0].strip().lower().startswith("# executive summary"):
-            content = "\n".join(lines[1:]).lstrip()
-
-        st.markdown(content)
-
-        with open(md_path, "rb") as fh:
-            st.download_button(
-                "Download executive_summary.md",
-                data=fh.read(),
-                file_name="executive_summary.md",
-                mime="text/markdown",
-            )
-    else:
-        st.info("No executive summary found. In a second terminal, run: .\\.venv\\Scripts\\python.exe exec_summary.py")
-
-elif page == "How to run":
-    h1("Loan Default Prediction — Dashboard")
-    page_band("How to run")
-
-    st.code(
-        "1) Run: python main.py  # generates reports/ and exports/\n"
-        "2) Start: python -m streamlit run dashboard.py\n"
-        "3) Open the Local URL in the terminal (usually http://localhost:8501)\n",
-        language="bash"
+# ===============================
+# Load dataset (or show guidance)
+# ===============================
+csv_path = find_dataset()
+if not csv_path:
+    st.error(
+        "I couldn’t find a compatible CSV in your repo. "
+        "Please add one (e.g., `data/clean_credit.csv` or `cs-training.csv`) "
+        "with the Give Me Some Credit columns. Then refresh."
     )
+    st.stop()
 
-    section_band("Files generated by the analysis")
-    colA, colB = st.columns(2)
-    with colA:
-        st.write("**reports/**")
-        st.code(
-            "reports/run_environment.txt\n"
-            "reports/cleaning_report.txt\n"
-            "reports/figure_captions.txt\n"
-            "reports/key_numbers.csv\n"
-            "reports/figures/*.png\n",
-            language="text"
-        )
-    with colB:
-        st.write("**exports/**")
-        st.code(
-            "exports/model_eval_summary.csv\n"
-            "exports/holdout_predictions.csv\n"
-            "exports/threshold_metrics.csv\n"
-            "exports/score_deciles_logreg.csv\n"
-            "exports/score_deciles_rf.csv\n",
-            language="text"
-        )
+df = load_data(csv_path)
 
-    st.info("Tip: Refresh Streamlit after you change code or re-run `main.py`.")
-# ============================ END PAGES ============================
+# Keep only relevant cols (if extra exist, that’s fine)
+available = [c for c in REQUIRED_COLS if c in df.columns]
+if "SeriousDlqin2yrs" not in df.columns:
+    st.error("The dataset is missing the target column `SeriousDlqin2yrs`.")
+    st.stop()
+
+# ===============================
+# Sidebar filters
+# ===============================
+with st.sidebar:
+    st.title("Filters")
+    st.caption(f"Data source: `{csv_path}`")
+
+    # Age filter
+    if "age" in df.columns and df["age"].notna().any():
+        amin, amax = int(df["age"].min()), int(df["age"].max())
+        age_rng = st.slider("Age range", min_value=amin, max_value=max(amax, amin+1), value=(amin, amax))
+    else:
+        age_rng = None
+
+    # MonthlyIncome filter
+    if "MonthlyIncome" in df.columns and df["MonthlyIncome"].notna().any():
+        mi_min, mi_max = float(df["MonthlyIncome"].min()), float(df["MonthlyIncome"].max())
+        income_rng = st.slider("Monthly income range", min_value=float(np.nan_to_num(mi_min, nan=0.0)),
+                               max_value=float(np.nan_to_num(mi_max, nan=100000.0)),
+                               value=(float(np.nan_to_num(mi_min, nan=0.0)), float(np.nan_to_num(np.nanpercentile(df["MonthlyIncome"].dropna(), 95), nan=mi_max))))
+    else:
+        income_rng = None
+
+    # Delinquency >0 filters (checkboxes)
+    delin_cols = [c for c in [
+        "NumberOfTime30-59DaysPastDueNotWorse",
+        "NumberOfTime60-89DaysPastDueNotWorse",
+        "NumberOfTimes90DaysLate"
+    ] if c in df.columns]
+
+    require_any_delinquency = st.checkbox("Only rows with any delinquency > 0", value=False)
+
+# Apply filters
+mask = pd.Series(True, index=df.index)
+if age_rng and "age" in df.columns:
+    mask &= df["age"].between(age_rng[0], age_rng[1], inclusive="both")
+if income_rng and "MonthlyIncome" in df.columns:
+    mi0, mi1 = income_rng
+    mask &= df["MonthlyIncome"].fillna(-1e12).between(mi0, mi1, inclusive="both")
+if require_any_delinquency and delin_cols:
+    any_delinq = (df[delin_cols].fillna(0) > 0).any(axis=1)
+    mask &= any_delinq
+
+df_filt = df[mask].copy()
+
+# ===============================
+# Overview (KPIs)
+# ===============================
+st.markdown('<div class="section-title">Overview</div>', unsafe_allow_html=True)
+with st.container():
+    c1, c2, c3, c4 = st.columns(4)
+    total_rows = len(df_filt)
+    target_mean = float(df_filt["SeriousDlqin2yrs"].mean()) if total_rows > 0 else 0.0
+    n_missing_income = int(df_filt["MonthlyIncome"].isna().sum()) if "MonthlyIncome" in df_filt.columns else 0
+    age_span = (int(df_filt["age"].min()), int(df_filt["age"].max())) if "age" in df_filt.columns and total_rows else (None, None)
+
+    c1.metric("Rows (after filters)", f"{total_rows:,}")
+    c2.metric("Default rate", pct(target_mean))
+    c3.metric("Missing MonthlyIncome", f"{n_missing_income:,}" if "MonthlyIncome" in df_filt.columns else "—")
+    c4.metric("Age span", f"{age_span[0]}–{age_span[1]}" if all(age_span) else "—")
+
+st.markdown('<hr class="separator" />', unsafe_allow_html=True)
+
+# ===============================
+# Target distribution
+# ===============================
+st.markdown('<div class="section-title">Target Distribution (SeriousDlqin2yrs)</div>', unsafe_allow_html=True)
+with st.container():
+    counts = df_filt["SeriousDlqin2yrs"].value_counts(dropna=False).sort_index()
+    fig = px.bar(
+        x=[str(int(k)) for k in counts.index],
+        y=counts.values,
+        labels={"x": "SeriousDlqin2yrs", "y": "Count"},
+        title=None
+    )
+    fig.update_layout(margin=dict(l=10, r=10, t=8, b=10), height=320)
+    st.plotly_chart(fig, use_container_width=True)
+
+# ===============================
+# Distributions (key numeric features)
+# ===============================
+num_cols = [c for c in df_filt.columns if c != "SeriousDlqin2yrs" and pd.api.types.is_numeric_dtype(df_filt[c])]
+top_show = [c for c in [
+    "age", "MonthlyIncome", "DebtRatio",
+    "RevolvingUtilizationOfUnsecuredLines",
+    "NumberOfOpenCreditLinesAndLoans",
+] if c in num_cols]
+
+if top_show:
+    st.markdown('<div class="section-title">Feature Distributions (colored by Default)</div>', unsafe_allow_html=True)
+    grid = st.columns(2)
+    for i, col in enumerate(top_show):
+        with grid[i % 2]:
+            fig = px.histogram(
+                df_filt, x=col, color=df_filt["SeriousDlqin2yrs"].astype(str),
+                nbins=50, barmode="overlay", opacity=0.65,
+                labels={col: col, "color": "Default"}
+            )
+            fig.update_layout(margin=dict(l=10, r=10, t=8, b=10), height=320, legend_title_text="Default")
+            st.plotly_chart(fig, use_container_width=True)
+
+# ===============================
+# Default rate by binned variables
+# ===============================
+def rate_by_bin(frame: pd.DataFrame, col: str, bins: int = 8) -> Optional[go.Figure]:
+    if col not in frame.columns or frame[col].dropna().empty:
+        return None
+    tmp = frame[[col, "SeriousDlqin2yrs"]].dropna()
+    if tmp.empty:
+        return None
+    tmp["bin"] = pd.qcut(tmp[col], q=min(bins, tmp[col].nunique()), duplicates="drop")
+    grp = tmp.groupby("bin")["SeriousDlqin2yrs"].mean().reset_index()
+    grp["rate"] = grp["SeriousDlqin2yrs"] * 100.0
+    fig = px.bar(grp, x="bin", y="rate", labels={"bin": col, "rate": "Default rate (%)"})
+    fig.update_layout(margin=dict(l=10, r=10, t=8, b=10), height=320)
+    return fig
+
+binnable = [c for c in ["age", "MonthlyIncome", "DebtRatio",
+                        "RevolvingUtilizationOfUnsecuredLines"] if c in df_filt.columns]
+
+if binnable:
+    st.markdown('<div class="section-title">Default Rate by Binned Features</div>', unsafe_allow_html=True)
+    cols = st.columns(2)
+    for i, ccol in enumerate(binnable[:4]):
+        fig = rate_by_bin(df_filt, ccol, bins=8)
+        if fig:
+            with cols[i % 2]:
+                st.plotly_chart(fig, use_container_width=True)
+
+# ===============================
+# Correlation heatmap (numeric)
+# ===============================
+if len(num_cols) >= 3:
+    st.markdown('<div class="section-title">Correlation Heatmap (Numeric Features)</div>', unsafe_allow_html=True)
+    corr = df_filt[num_cols + ["SeriousDlqin2yrs"]].corr(numeric_only=True)
+    heat = go.Figure(data=go.Heatmap(
+        z=corr.values,
+        x=corr.columns,
+        y=corr.index,
+        zmin=-1, zmax=1,
+        colorbar=dict(title="ρ")
+    ))
+    heat.update_layout(margin=dict(l=10, r=10, t=8, b=10), height=520)
+    st.plotly_chart(heat, use_container_width=True)
+
+# ===============================
+# Missingness
+# ===============================
+st.markdown('<div class="section-title">Missing Values by Column</div>', unsafe_allow_html=True)
+miss = df_filt.isna().sum().sort_values(ascending=False)
+miss_df = miss[miss > 0].reset_index()
+miss_df.columns = ["column", "missing"]
+if not miss_df.empty:
+    fig = px.bar(miss_df, x="column", y="missing", labels={"missing": "Missing rows"})
+    fig.update_layout(margin=dict(l=10, r=10, t=8, b=10), height=320)
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.markdown('<div class="block small-muted">No missing values in the filtered data.</div>', unsafe_allow_html=True)
+
+# ===============================
+# Fallback: show any saved figure PNGs if present (optional)
+# ===============================
+pngs = sorted(glob.glob("reports/figures/*.png"))
+if pngs:
+    st.markdown('<div class="section-title">Saved Figures (from reports/figures)</div>', unsafe_allow_html=True)
+    cols = st.columns(3)
+    for i, p in enumerate(pngs):
+        with cols[i % 3]:
+            st.image(p, use_container_width=True)
