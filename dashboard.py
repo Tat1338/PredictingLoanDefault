@@ -574,7 +574,7 @@ elif page == "Risk Buckets (A–D)":
     st.download_button("Download full scored test set (CSV)", data=csv, file_name="scored_test_with_buckets.csv", mime="text/csv")
 
 # ===================== 8) Lending Triage (Try a borrower) =====================
-elif page == "Client Credit Check:
+elif page == "Client Credit Check":
     big_title("Client Credit Check — Enter borrower details")
     st.caption("Type the borrower’s details to get a GO / CAUTION / STOP verdict with a risk gauge.")
 
