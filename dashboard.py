@@ -1,6 +1,6 @@
 # dashboard.py
 # Loan Default Dashboard — EDA + Modeling + A–D Buckets + Client Credit Check
-# Enhancements:
+# Enhancements included:
 # - Threshold objective selector (F1 / Youden’s J / Cost-weighted)
 # - Calibration curve + Brier score
 # - Permutation importance (test set)
@@ -8,6 +8,7 @@
 # - Interactive Lab CSV export
 # - Robust Saved Figures viewer
 # - Teal styling, clear labels, same navigation
+# - Client Credit Check: HELP + mini-calculators for Debt Ratio and Utilization
 
 from __future__ import annotations
 
@@ -104,7 +105,7 @@ def find_dataset() -> Optional[str]:
 def _to_numeric(df: pd.DataFrame) -> pd.DataFrame:
     for c in df.columns:
         df[c] = pd.to_numeric(df[c], errors="coerce")
-    # clean display (no decimals)
+    # clean display (no decimals for Age/Income)
     if "age" in df.columns:
         df["age"] = df["age"].round().astype("Int64")
     if "MonthlyIncome" in df.columns:
@@ -697,16 +698,71 @@ elif page == "Client Credit Check":
     with col1:
         age = st.number_input("Age", min_value=a_min, max_value=a_max, value=a_def, step=1)
         income = st.number_input("Monthly Income", min_value=m_min, max_value=m_max, value=m_def, step=1)
-        util = st.number_input("Card/Line Utilization", min_value=u_min, max_value=max(u_max,1), value=u_def, step=1)
+
+        # -------- Card/Line Utilization with help + calculator --------
+        st.markdown("**Card/Line Utilization**")
+        with st.expander("What is this? (tap to help)"):
+            st.markdown("""
+**Card/Line Utilization = Total revolving balances ÷ Total credit limits**
+
+- Revolving balances: current balances on credit cards/lines of credit.  
+- Credit limits: total available limits across those same cards/lines.  
+
+**Example:** balances 60,000 and limits 200,000 ⇒ 60,000 / 200,000 = **0.30 (30%)**.  
+Higher utilization (closer to 1.0 or 100%) usually means higher risk.
+            """)
+            # Quick calculator
+            rev_bal = st.number_input("Total revolving balances", min_value=0, value=60000, step=1000, key="rev_bal_calc")
+            tot_lim = st.number_input("Total credit limits", min_value=1, value=200000, step=1000, key="tot_lim_calc")
+            calc_util = round(rev_bal / tot_lim, 2)
+            st.caption(f"Calculated Utilization: **{calc_util:.2f}**  (use this below if helpful)")
+
+        util = st.number_input(
+            "Enter Utilization (e.g., 0.30 for 30%)",
+            min_value=0.0,
+            max_value=5.0,         # allow >1.0 for odd data
+            value=float(calc_util),
+            step=0.01,
+            help="Utilization = total revolving balances ÷ total credit limits"
+        )
+
     with col2:
-        dratio = st.number_input("Debt Ratio", min_value=d_min, max_value=max(d_max,1), value=d_def, step=1)
+        # -------- Debt Ratio with help + calculator --------
+        st.markdown("**Debt Ratio**")
+        with st.expander("What is this? (tap to help)"):
+            st.markdown("""
+**Debt Ratio = Total monthly debt payments ÷ Gross monthly income**
+
+- Monthly debt payments: mortgage/rent (per policy), car/student/personal loans, minimum card payments, other finance plans.  
+- Gross income: before-tax monthly income.
+
+**Example:** 12,000 / 40,000 = **0.30 (30%)**.
+            """)
+
+            # Quick calculator
+            m_pay = st.number_input("Monthly debt payments", min_value=0, value=12000, step=500, key="m_pay_calc")
+            g_inc = st.number_input("Gross monthly income", min_value=1, value=40000, step=500, key="g_inc_calc")
+            calc_dr = round(m_pay / g_inc, 2)
+            st.caption(f"Calculated Debt Ratio: **{calc_dr:.2f}**  (use this below if helpful)")
+
+        dratio = st.number_input(
+            "Enter Debt Ratio (e.g., 0.30 for 30%)",
+            min_value=0.0,
+            max_value=max(d_max,1),
+            value=float(calc_dr),
+            step=0.01,
+            help="Debt Ratio = total monthly debt payments ÷ gross monthly income"
+        )
+
         open_lines = st.number_input("Open Credit Lines/Loans", min_value=l_min, max_value=l_max, value=l_def, step=1)
         dependents = st.number_input("Dependents", min_value=dep_min, max_value=max(dep_max,0), value=dep_def, step=1)
+
     with col3:
         late30 = st.number_input("Times 30–59 Days Late", min_value=0, max_value=max(1,t30_max), value=0, step=1)
         late60 = st.number_input("Times 60–89 Days Late", min_value=0, max_value=max(1,t60_max), value=0, step=1)
         late90 = st.number_input("Times 90+ Days Late", min_value=0, max_value=max(1,t90_max), value=0, step=1)
 
+    # Build feature row using medians then overwrite with inputs
     med = df_full[model_cols].median(numeric_only=True)
     row = med.reindex(model_cols).astype(float)
     for k,v in {
