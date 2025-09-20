@@ -555,7 +555,8 @@ elif page == "Risk Buckets (A–D)":
     st.download_button("Download full scored test set (CSV)", data=csv, file_name="scored_test_with_buckets.csv", mime="text/csv")
 
 # ===================== 8) Saved Figures =====================
-    elif page == "Saved Figures":
+elif page == "Saved Figures":
+    # Robust viewer for reports/figures images
     from PIL import Image, UnidentifiedImageError
 
     big_title("Saved Figures")
@@ -566,55 +567,56 @@ elif page == "Risk Buckets (A–D)":
             img = Image.open(path)
             img.load()  # fully read
             if img.mode not in ("RGB", "L"):
-                img = img.convert("RGB")  # normalize mode
-            img.thumbnail((1600, 1600))  # keep browser happy
-            return img, None
-        except UnidentifiedImageError as e:
-            return None, f"Unrecognized image format: {e}"
+                img = img.convert("RGB")
+            img.thumbnail((1600, 1600))  # keep browser fast
+            return img
+        except (UnidentifiedImageError, OSError) as e:
+            raise RuntimeError(f"Unrecognized or unreadable image: {e}")
         except Exception as e:
-            return None, str(e)
+            raise RuntimeError(str(e))
 
 
     patterns = ["reports/figures/*.png", "reports/figures/*.jpg", "reports/figures/*.jpeg"]
-    files = []
+    files: list[str] = []
     for pat in patterns:
         files.extend(sorted(glob.glob(pat)))
 
-    if files:
+    if not files:
+        st.markdown('<div class="block note">No images found in reports/figures.</div>', unsafe_allow_html=True)
+    else:
         section_title("reports/figures")
         cols = st.columns(3)
-        for i, p in enumerate(files):
-            img, err = load_image_safe(p)
+        for i, path in enumerate(files):
             with cols[i % 3]:
-                if img is not None:
-                    # NOTE: st.image expects use_column_width (not use_container_width)
-                    st.image(img, use_column_width=True, caption=os.path.basename(p))
+                try:
+                    img = load_image_safe(path)
+                    # NOTE: Streamlit uses use_column_width (not use_container_width) for st.image
+                    st.image(img, use_column_width=True, caption=os.path.basename(path))
+                    # Offer a download button
                     try:
-                        with open(p, "rb") as f:
+                        with open(path, "rb") as f:
                             st.download_button(
                                 label="Download",
                                 data=f.read(),
-                                file_name=os.path.basename(p),
-                                mime="image/png" if p.lower().endswith(".png") else "image/jpeg",
-                                key=f"dl_{i}_{os.path.basename(p)}",
+                                file_name=os.path.basename(path),
+                                mime="image/png" if path.lower().endswith(".png") else "image/jpeg",
+                                key=f"dl_{i}_{os.path.basename(path)}",
                             )
                     except Exception:
                         pass
-                else:
-                    st.markdown(f"- Could not display: `{p}` — {err or 'unknown error'}")
+                except Exception as e:
+                    st.markdown(f"- Could not display: `{path}` — {e}")
                     try:
-                        with open(p, "rb") as f:
+                        with open(path, "rb") as f:
                             st.download_button(
-                                label=f"Download {os.path.basename(p)}",
+                                label=f"Download {os.path.basename(path)}",
                                 data=f.read(),
-                                file_name=os.path.basename(p),
+                                file_name=os.path.basename(path),
                                 mime="application/octet-stream",
-                                key=f"dl_err_{i}_{os.path.basename(p)}",
+                                key=f"dl_err_{i}_{os.path.basename(path)}",
                             )
                     except Exception:
                         pass
-    else:
-        st.markdown('<div class="block note">No images found in reports/figures.</div>', unsafe_allow_html=True)
 
     # Support common formats
     patterns = ["reports/figures/*.png", "reports/figures/*.jpg", "reports/figures/*.jpeg"]
