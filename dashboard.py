@@ -180,11 +180,15 @@ if page == "Introduction":
         st.image(HERO_PATH, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
+
     big_title("Loan Default Dashboard")
     # Hero image at the top of the first page
-    img_path = "assets/credit_risk_hero.jpg"
+    img_path = "assets/credit_risk_hero.JPG"
     if os.path.exists(img_path):
-        st.image(img_path, use_container_width=True)
+        from pathlib import Path  # put with your imports if not already there
+
+        img_data = Path(img_path).read_bytes()
+        st.image(img_data, use_container_width=True)
 
     section_title("Purpose")
     st.markdown("""
