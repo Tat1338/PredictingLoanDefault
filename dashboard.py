@@ -1,10 +1,5 @@
 # dashboard.py
 # Loan Default Dashboard — EDA · Modeling · A–D Buckets · Client Credit Check
-# - Centered hero image (robust PIL loader; no use_container_width quirk)
-# - Plain-English Intro (for non-analysts)
-# - Age capped at 100
-# - Monthly Income text box with smart parsing (no awkward giant slider)
-# - Same visuals and navigation as your previous build
 
 from __future__ import annotations
 
@@ -17,7 +12,6 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-
 from PIL import Image, UnidentifiedImageError
 
 from sklearn.model_selection import train_test_split
@@ -34,38 +28,20 @@ from sklearn.inspection import permutation_importance
 # ---------------- Page + Styles ----------------
 st.set_page_config(page_title="Loan Default — Dashboard", layout="wide")
 
-st.markdown(
-    """
+st.markdown("""
 <style>
-:root {
-  --teal: #007c82;
-  --teal-light: #e6f6f7;
-  --ink: #0f172a;
-  --muted: #475569;
-  --radius: 16px;
-  --shadow: 0 6px 18px rgba(0,0,0,0.08);
-}
-.big-title {
-  background: var(--teal); color:#fff!important; padding:18px 22px;
-  border-radius: var(--radius); box-shadow: var(--shadow); font-size:1.6rem;
-  font-weight:700; margin:8px 0 18px 0; letter-spacing:.2px;
-  text-align:center;                     /* centered title */
-}
-.section-title {
-  background: var(--teal-light); border:2px solid var(--teal); color:var(--ink);
-  padding:10px 14px; border-radius:12px; box-shadow: var(--shadow); font-size:1.05rem;
-  font-weight:700; margin:8px 0 10px 0;
-}
-.note { color: var(--muted); font-size:.95rem; margin:6px 2px 14px 2px; }
-.block { background:#fff; border-radius: var(--radius); box-shadow: var(--shadow); padding:14px; }
-hr.separator { border:none; height:1px; background:#e2e8f0; margin:18px 0; }
-.stMetric > div { justify-content: center; }   /* center metric values */
-.hero-wrap { width:100%; display:flex; justify-content:center; margin: 8px 0 12px 0; }
-.hero-wrap img { max-width: 900px; width: 100%; height:auto; margin:0; }
+:root { --teal:#007c82; --teal-light:#e6f6f7; --ink:#0f172a; --muted:#475569;
+        --radius:16px; --shadow:0 6px 18px rgba(0,0,0,.08); }
+.big-title{background:var(--teal);color:#fff!important;padding:18px 22px;border-radius:var(--radius);
+  box-shadow:var(--shadow);font-size:1.6rem;font-weight:700;margin:8px 0 18px;letter-spacing:.2px;text-align:center;}
+.section-title{background:var(--teal-light);border:2px solid var(--teal);color:var(--ink);
+  padding:10px 14px;border-radius:12px;box-shadow:var(--shadow);font-size:1.05rem;font-weight:700;margin:8px 0 10px;}
+.note{color:var(--muted);font-size:.95rem;margin:6px 2px 14px;}
+.block{background:#fff;border-radius:var(--radius);box-shadow:var(--shadow);padding:14px;}
+hr.separator{border:none;height:1px;background:#e2e8f0;margin:18px 0;}
+.stMetric > div{justify-content:center;}
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 def big_title(t: str): st.markdown(f'<div class="big-title">{t}</div>', unsafe_allow_html=True)
 def section_title(t: str): st.markdown(f'<div class="section-title">{t}</div>', unsafe_allow_html=True)
@@ -85,7 +61,7 @@ DISPLAY = {
     "SeriousDlqin2yrs": "Serious Delinquency (within 2 Years)"
 }
 
-# ---------------- Assets: centered hero image ----------------
+# ---------------- Assets: hero image loader ----------------
 APP_DIR = Path(__file__).parent
 ASSETS_DIR = APP_DIR / "assets"
 HERO_CANDIDATES = [
@@ -96,15 +72,12 @@ HERO_CANDIDATES = [
     ASSETS_DIR / "credit_risk_hero.PNG",
 ]
 
-def load_hero_image() -> Image.Image | None:
-    """Open banner image robustly (works with JPG/PNG and odd color modes)."""
+def load_hero_image() -> Optional[Image.Image]:
     for p in HERO_CANDIDATES:
         try:
             if p.exists():
-                img = Image.open(p)
-                img.load()
-                if img.mode not in ("RGB", "L"):
-                    img = img.convert("RGB")
+                img = Image.open(p); img.load()
+                if img.mode not in ("RGB", "L"): img = img.convert("RGB")
                 return img
         except (UnidentifiedImageError, OSError):
             continue
@@ -140,10 +113,8 @@ def find_dataset() -> Optional[str]:
 def _to_numeric(df: pd.DataFrame) -> pd.DataFrame:
     for c in df.columns:
         df[c] = pd.to_numeric(df[c], errors="coerce")
-    if "age" in df.columns:
-        df["age"] = df["age"].round().astype("Int64")
-    if "MonthlyIncome" in df.columns:
-        df["MonthlyIncome"] = df["MonthlyIncome"].round(0).astype("Int64")
+    if "age" in df.columns: df["age"] = df["age"].round().astype("Int64")
+    if "MonthlyIncome" in df.columns: df["MonthlyIncome"] = df["MonthlyIncome"].round(0).astype("Int64")
     return df
 
 @st.cache_data(show_spinner=False)
@@ -163,7 +134,6 @@ if not csv_path:
 df_full = load_data(csv_path)
 
 def safe_rate_by_bin(frame: pd.DataFrame, col: str, bins: int = 8) -> Optional[go.Figure]:
-    """Default rate by quantile bins with safe fallbacks."""
     try:
         if col not in frame.columns or frame[col].dropna().empty: return None
         tmp = frame[[col,"SeriousDlqin2yrs"]].dropna()
@@ -180,22 +150,19 @@ def safe_rate_by_bin(frame: pd.DataFrame, col: str, bins: int = 8) -> Optional[g
     except Exception:
         return None
 
-# Money parser for Monthly Income text box
+# Money parser for Client Credit Check text box
 def parse_money_to_int(text: str, default: int = 0, cap: int = 100_000) -> int:
-    """
-    Accepts '2500', '2,500', '$2,500', '2.5k' and returns an int within [0, cap].
-    """
-    if text is None:
-        return default
+    if text is None: return default
     s = str(text).strip().lower().replace(",", "")
     try:
         if s.endswith("k"):
             val = float(s[:-1]) * 1000
+        elif s.endswith("m"):
+            val = float(s[:-1]) * 1_000_000
         else:
             s = re.sub(r"[^0-9.\-]", "", s)
             val = float(s) if s not in ("", ".", "-") else default
-        val = int(round(val))
-        return max(0, min(val, cap))
+        return max(0, min(int(round(val)), cap))
     except Exception:
         return default
 
@@ -221,34 +188,32 @@ with st.sidebar:
 if page == "Introduction":
     big_title("Loan Default Dashboard")
 
-    # Centered banner image under the title (aligned with content)
+    # Center hero image under the title
     hero_img = load_hero_image()
     if hero_img is not None:
-        st.markdown('<div class="hero-wrap">', unsafe_allow_html=True)
-        st.image(hero_img, width=900)  # safe, older Streamlit supports width=
-        st.markdown('</div>', unsafe_allow_html=True)
+        left, mid, right = st.columns([1, 2, 1])
+        with mid:
+            st.image(hero_img, use_column_width=True)
     else:
         st.caption("Add a banner image at `assets/credit_risk_hero.(jpg/png)` to show it here.")
 
     section_title("Welcome")
-    st.markdown(
-        """
-Banks lend to thousands of people every day. This app looks at real, anonymized customer data
-(~150,000 rows) to see which borrowers are **more likely to default** on a loan.
+    st.markdown("""
+Banks lend to thousands of people every day. This app uses real, anonymized customer data
+(~150,000 rows) to estimate which borrowers are **more likely to default** on a loan.
 
-Why it matters is simple:
+Why it matters:
 - Lending to the wrong client can cost millions in losses.
 - Saying “no” to the right client means missed revenue.
 
-What you’ll find here:
+What’s inside:
 - clear views of the features that drive risk,
-- a small but transparent model with the usual checks,
+- a small, transparent model with the usual checks,
 - **A–D** risk buckets for quick portfolio slicing,
 - and a **Client Credit Check** to score one case in seconds.
 
 Use this as a guide alongside policy and judgement.
-        """
-    )
+""")
 
     section_title("Key terms")
     st.markdown(
@@ -270,14 +235,12 @@ Use this as a guide alongside policy and judgement.
     c4.metric("Age span", f"{age_min}–{age_max}" if age_min is not None else "—")
 
     section_title("Data & methods")
-    st.markdown(
-        """
+    st.markdown("""
 **Target:** 1 = serious delinquency within two years; 0 = otherwise.  
 **Prep:** cast numerics, drop invalid ages (≤ 0), median-impute gaps, standardize features for modeling.  
 **Model:** logistic regression with class-weighting on a hold-out split; we show ROC, PR, calibration, Brier, KS, and gains.  
 **Use:** scores guide decisions; they do not replace policy or manual review.
-        """
-    )
+""")
 
 # ---------------- 2) Feature Distributions ----------------
 elif page == "Feature Distributions":
@@ -372,7 +335,7 @@ elif page == "Relationships & Segments":
         rate_by_dep["Default rate (%)"] = 100*rate_by_dep["Default rate"]
         figD = px.bar(rate_by_dep, x="Dependents", y="Default rate (%)")
         figD.update_layout(height=320, margin=dict(l=10,r=10,t=8,b=10))
-        st.plotly_chart(figD, use_column_width=True)
+        st.plotly_chart(figD, use_container_width=True)
     st.markdown('<div class="note">Top bands generally show higher risk: more open lines/loans or more dependents.</div>', unsafe_allow_html=True)
 
     st.markdown('<hr class="separator" />', unsafe_allow_html=True)
@@ -432,36 +395,50 @@ elif page == "Interactive Lab":
 
     section_title("Filters")
     colF1, colF2 = st.columns(2)
+
+    # Age slider (cap max at 100)
     if "age" in df_full.columns and df_full["age"].notna().any():
-        amin, amax = int(df_full["age"].min()), int(df_full["age"].max())
-        amax = min(amax, 100)  # cap the upper slider bound for age
-        age_rng = colF1.slider("Age range", min(18, amin), max(amax, 18), (min(18, amin), amax))
+        amin = int(df_full["age"].min())
+        amax = min(int(df_full["age"].max()), 100)
+        default_lo = max(18, amin)
+        default_hi = amax
+        age_rng = colF1.slider("Age range", default_lo, amax, (default_lo, default_hi))
     else:
         age_rng = None
-    # Monthly income range — default cap at 100k; toggle for very high values
+
+    # Income slider: easy (0–100k) with toggle for outliers
     if "MonthlyIncome" in df_full.columns and df_full["MonthlyIncome"].notna().any():
         mi_min = float(df_full["MonthlyIncome"].min())
         mi_max = float(df_full["MonthlyIncome"].max())
         mi_95 = float(np.nanpercentile(df_full["MonthlyIncome"].dropna(), 95))
-
-        # Default view: keep the slider usable (cap at 100k)
         show_high = colF2.checkbox("Allow very high incomes", value=False,
                                    help="Tick to explore incomes above 100,000")
         slider_cap = 3_000_000 if show_high else 100_000
-
-        # upper bound for the control and its default position
         slider_max = float(min(mi_max, slider_cap))
-        default_hi = float(min(mi_95, slider_max))
         default_lo = float(np.nan_to_num(mi_min, nan=0.0))
-
-        income_rng = colF2.slider(
-            "Monthly income range",
-            min_value=default_lo,
-            max_value=slider_max,
-            value=(default_lo, default_hi),
-        )
+        default_hi = float(min(mi_95, slider_max))
+        income_rng = colF2.slider("Monthly income range", default_lo, slider_max, (default_lo, default_hi))
     else:
         income_rng = None
+
+    # Optional delinquency filter
+    del_cols = [c for c in [
+        "NumberOfTime30-59DaysPastDueNotWorse",
+        "NumberOfTime60-89DaysPastDueNotWorse",
+        "NumberOfTimes90DaysLate"
+    ] if c in df_full.columns]
+    require_del = st.checkbox("Only rows with any past-due > 0", value=False)
+
+    # Build filtered df used below
+    mask = pd.Series(True, index=df_full.index)
+    if age_rng and "age" in df_full.columns:
+        mask &= df_full["age"].between(age_rng[0], age_rng[1], inclusive="both")
+    if income_rng and "MonthlyIncome" in df_full.columns:
+        lo, hi = income_rng
+        mask &= df_full["MonthlyIncome"].fillna(-1e12).between(lo, hi, inclusive="both")
+    if require_del and del_cols:
+        mask &= (df_full[del_cols].fillna(0) > 0).any(axis=1)
+    df = df_full[mask].copy()
 
     section_title("Interactive — default rate by bins")
     choices = [c for c in ["age","MonthlyIncome","DebtRatio","RevolvingUtilizationOfUnsecuredLines"] if c in df.columns]
@@ -517,6 +494,7 @@ elif page == "Modeling & Metrics":
     lr = LogisticRegression(max_iter=500, solver="liblinear", class_weight="balanced"); lr.fit(X_train, y_train)
     y_proba = lr.predict_proba(X_test)[:,1]; auc = roc_auc_score(y_test, y_proba)
 
+    # store for other pages
     st.session_state["__model_cols__"] = X_cols
     st.session_state["__scaler_mean__"] = scaler.mean_.tolist()
     st.session_state["__scaler_scale__"] = scaler.scale_.tolist()
@@ -562,7 +540,7 @@ elif page == "Modeling & Metrics":
         for th in ths:
             pred = (y_proba >= th).astype(int)
             tn, fp, fn, tp = confusion_matrix(y_test, pred, labels=[0,1]).ravel()
-            cost = fp + fn_cost * fn
+            cost = fp + fn_cost * fn  # minimize cost
             score = -cost
             if score > best_score: best_score, best_th = score, th
 
@@ -726,7 +704,9 @@ elif page == "Risk Buckets (A–D)":
     topD = scored[scored["bucket"]=="D"].sort_values("prob_default", ascending=False).head(n_top)
     st.dataframe(topD[cols_show], use_container_width=True)
 
-    csv = scored[["BorrowerID","prob_default","true_label","bucket"] + extras].sort_values("prob_default", descending=True if hasattr(pd, "NA") else False).to_csv(index=False)
+    csv = (scored[["BorrowerID","prob_default","true_label","bucket"] + extras]
+           .sort_values("prob_default", ascending=False)
+           .to_csv(index=False))
     st.download_button("Download full scored test set (CSV)", data=csv, file_name="scored_test_with_buckets.csv", mime="text/csv")
 
 # ---------------- 8) Client Credit Check ----------------
@@ -753,33 +733,24 @@ elif page == "Client Credit Check":
     coef = np.array(st.session_state["__coef__"])
     intercept = float(st.session_state["__intercept__"])
 
-    # --- Safe helpers for input ranges ---
+    # Safe range helper (cap age at 100)
     def data_range(col, qlo=0.10, qhi=0.90, fallback_max=100, hard_min=0):
         if col not in df_full.columns or df_full[col].dropna().empty:
             lo, hi = hard_min, max(hard_min + 10, fallback_max)
             default = (lo + hi) // 2
-            # cap age upper bound at 100
-            if col == "age":
-                hi = min(hi, 100)
-                default = min(default, 100)
+            if col == "age": hi = min(hi, 100); default = min(default, 100)
             return int(lo), int(hi), int(default)
         s = pd.to_numeric(df_full[col], errors="coerce").dropna()
-        ql = float(np.nanquantile(s, qlo))
-        qh = float(np.nanquantile(s, qhi))
-        lo = int(min(ql, qh, s.min()))
-        hi = int(max(ql, qh, s.max()))
-        lo = max(int(hard_min), lo)
+        ql = float(np.nanquantile(s, qlo)); qh = float(np.nanquantile(s, qhi))
+        lo = int(min(ql, qh, s.min())); hi = int(max(ql, qh, s.max())); lo = max(int(hard_min), lo)
         if hi <= lo: hi = lo + 1
         default = int((lo + hi) // 2)
-        if col == "age":
-            hi = min(hi, 100)
-            default = min(default, 100)
+        if col == "age": hi = min(hi, 100); default = min(default, 100)
         return lo, hi, default
 
     def clamp(val, lo, hi): return max(lo, min(hi, val))
 
-    a_min, a_max, a_def   = data_range("age", fallback_max=100, hard_min=18)
-    a_max = min(a_max, 100)  # enforce 100 cap
+    a_min, a_max, a_def   = data_range("age", fallback_max=100, hard_min=18); a_max = min(a_max, 100)
     m_min, m_max, m_def   = data_range("MonthlyIncome", fallback_max=100_000, hard_min=0)
     u_min, u_max, u_def   = data_range("RevolvingUtilizationOfUnsecuredLines", fallback_max=200, hard_min=0)
     d_min, d_max, d_def   = data_range("DebtRatio", fallback_max=300, hard_min=0)
@@ -794,23 +765,13 @@ elif page == "Client Credit Check":
 
     # Left column
     with col1:
-        age = st.number_input(
-            "Age",
-            min_value=a_min,
-            max_value=a_max,
-            value=max(a_min, min(a_def, a_max)),
-            step=1,
-            key="cc_age",
-        )
+        age = st.number_input("Age", min_value=a_min, max_value=a_max,
+                              value=max(a_min, min(a_def, a_max)), step=1, key="cc_age")
 
-        # Monthly Income text input (for easy typing)
+        # text input for Monthly Income (easy typing)
         mi_default_str = f"{int(max(0, min(m_def, 100_000)))}"
-        mi_text = st.text_input(
-            "Monthly Income",
-            value=mi_default_str,
-            help="Type an amount like 2500, $2,500, or 2.5k",
-            key="cc_inc_text",
-        )
+        mi_text = st.text_input("Monthly Income", value=mi_default_str,
+                                help="Type 2500, $2,500, 2.5k, or 1.2m", key="cc_inc_text")
         income = parse_money_to_int(mi_text, default=int(m_def), cap=100_000)
 
         st.markdown("**Card/Line Utilization**")
@@ -825,34 +786,26 @@ elif page == "Client Credit Check":
             calc_util = round(rev_bal / tot_lim, 2)
             st.caption(f"Calculated Utilization: **{calc_util:.2f}** — copy below if helpful.")
 
-        util = st.number_input(
-            "Enter Utilization (e.g., 0.30 = 30%)",
-            min_value=0.0, max_value=max(5.0, float(u_max)),
-            value=float(clamp(calc_util if np.isfinite(calc_util) else 0.3, 0.0, max(5.0, float(u_max)))),
-            step=0.01, key="cc_util",
-            help="Utilization = balances ÷ limits"
-        )
+        util = st.number_input("Enter Utilization (e.g., 0.30 = 30%)",
+                               min_value=0.0, max_value=max(5.0, float(u_max)),
+                               value=float(clamp(calc_util if np.isfinite(calc_util) else 0.3, 0.0, max(5.0, float(u_max)))),
+                               step=0.01, key="cc_util", help="Utilization = balances ÷ limits")
 
     # Middle column
     with col2:
         st.markdown("**Debt Ratio**")
         with st.expander("What is this? (help)", expanded=False):
-            st.markdown(
-                "**Debt Ratio = Total monthly debt payments ÷ Gross monthly income**  \n"
-                "Example: 12,000 / 40,000 = **0.30 (30%)**."
-            )
+            st.markdown("**Debt Ratio = Total monthly debt payments ÷ Gross monthly income**  \n"
+                        "Example: 12,000 / 40,000 = **0.30 (30%)**.")
             m_pay = st.number_input("Monthly debt payments", min_value=0, value=12000, step=500, key="cc_mpay")
             g_inc = st.number_input("Gross monthly income",  min_value=1, value=40000, step=500, key="cc_ginc")
             calc_dr = round(m_pay / g_inc, 2)
             st.caption(f"Calculated Debt Ratio: **{calc_dr:.2f}** — copy below if helpful.")
 
-        dratio = st.number_input(
-            "Enter Debt Ratio (e.g., 0.30 = 30%)",
-            min_value=0.0, max_value=max(1.0, float(d_max)),
-            value=float(clamp(calc_dr if np.isfinite(calc_dr) else 0.3, 0.0, max(1.0, float(d_max)))),
-            step=0.01, key="cc_dratio",
-            help="Debt Ratio = monthly debt ÷ gross income"
-        )
+        dratio = st.number_input("Enter Debt Ratio (e.g., 0.30 = 30%)",
+                                 min_value=0.0, max_value=max(1.0, float(d_max)),
+                                 value=float(clamp(calc_dr if np.isfinite(calc_dr) else 0.3, 0.0, max(1.0, float(d_max)))),
+                                 step=0.01, key="cc_dratio", help="Debt Ratio = monthly debt ÷ gross income")
 
         open_lines = st.number_input("Open Credit Lines/Loans",
                                      min_value=l_min, max_value=l_max,
@@ -868,22 +821,16 @@ elif page == "Client Credit Check":
         late60 = st.number_input("Times 60–89 Days Late", min_value=0, max_value=max(1, t60_max), value=0, step=1, key="cc_60")
         late90 = st.number_input("Times 90+ Days Late",   min_value=0, max_value=max(1, t90_max), value=0, step=1, key="cc_90")
 
-    # ---------- Score the case ----------
+    # Score the case
     med = df_full[model_cols].median(numeric_only=True)
     row = med.reindex(model_cols).astype(float)
     for k, v in {
-        "age": age,
-        "MonthlyIncome": income,
-        "RevolvingUtilizationOfUnsecuredLines": util,
-        "DebtRatio": dratio,
-        "NumberOfOpenCreditLinesAndLoans": open_lines,
-        "NumberOfDependents": dependents,
-        "NumberOfTime30-59DaysPastDueNotWorse": late30,
-        "NumberOfTime60-89DaysPastDueNotWorse": late60,
-        "NumberOfTimes90DaysLate": late90,
+        "age": age, "MonthlyIncome": income, "RevolvingUtilizationOfUnsecuredLines": util,
+        "DebtRatio": dratio, "NumberOfOpenCreditLinesAndLoans": open_lines,
+        "NumberOfDependents": dependents, "NumberOfTime30-59DaysPastDueNotWorse": late30,
+        "NumberOfTime60-89DaysPastDueNotWorse": late60, "NumberOfTimes90DaysLate": late90,
     }.items():
-        if k in row.index:
-            row[k] = float(v)
+        if k in row.index: row[k] = float(v)
 
     X = row.values.reshape(1, -1)
     Xs = (X - scaler_mean) / np.where(scaler_scale == 0, 1.0, scaler_scale)
@@ -933,8 +880,7 @@ elif page == "Saved Figures":
     def load_image_safe(path: str):
         try:
             img = Image.open(path); img.load()
-            if img.mode not in ("RGB","L"):
-                img = img.convert("RGB")
+            if img.mode not in ("RGB","L"): img = img.convert("RGB")
             img.thumbnail((1600,1600))
             return img, None
         except (UnidentifiedImageError, OSError) as e:
@@ -958,26 +904,20 @@ elif page == "Saved Figures":
                     st.image(img, use_column_width=True, caption=os.path.basename(p))
                     try:
                         with open(p, "rb") as f:
-                            st.download_button(
-                                label="Download",
-                                data=f.read(),
-                                file_name=os.path.basename(p),
-                                mime="image/png" if p.lower().endswith(".png") else "image/jpeg",
-                                key=f"dl_{i}_{os.path.basename(p)}",
-                            )
+                            st.download_button("Download", data=f.read(),
+                                               file_name=os.path.basename(p),
+                                               mime="image/png" if p.lower().endswith(".png") else "image/jpeg",
+                                               key=f"dl_{i}_{os.path.basename(p)}")
                     except Exception:
                         pass
                 else:
                     st.markdown(f"- Could not display: `{p}` — {err or 'unknown error'}")
                     try:
                         with open(p, "rb") as f:
-                            st.download_button(
-                                label=f"Download {os.path.basename(p)}",
-                                data=f.read(),
-                                file_name=os.path.basename(p),
-                                mime="application/octet-stream",
-                                key=f"dl_err_{i}_{os.path.basename(p)}",
-                            )
+                            st.download_button(label=f"Download {os.path.basename(p)}", data=f.read(),
+                                               file_name=os.path.basename(p),
+                                               mime="application/octet-stream",
+                                               key=f"dl_err_{i}_{os.path.basename(p)}")
                     except Exception:
                         pass
 
