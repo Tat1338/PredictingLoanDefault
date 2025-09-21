@@ -1,8 +1,8 @@
-# dashboard.py — stable, all-in-one exam build
-# - Bytes->PIL safe image loading (fixes st.image TypeError on cloud)
-# - Guarded pages so missing files never crash the app
-# - Restored "Client Credit Check" with gauge + A–D bucket
-# - Lightweight visuals (no exotic deps)
+# dashboard.py — stable, human-written copy + working image, gauge & calculator
+# Notes:
+# - No 'use_container_width' on st.image (compat with older Streamlit on Cloud)
+# - Hero image opened via PIL to avoid type errors
+# - Each page wrapped safely so the whole app never hard-crashes
 
 from __future__ import annotations
 
@@ -13,12 +13,10 @@ from typing import Optional, Callable
 import numpy as np
 import pandas as pd
 import streamlit as st
-
-# Plotly is bundled on Streamlit Cloud and safe to use
 import plotly.graph_objects as go
 from PIL import Image
 
-# ================== CONFIG ==================
+# ---------- App setup ----------
 st.set_page_config(
     page_title="Loan Default — Dashboard",
     layout="wide",
@@ -27,50 +25,38 @@ st.set_page_config(
 
 APP_DIR = Path(__file__).parent
 ASSETS_DIR = APP_DIR / "assets"
-DATA_PATH = APP_DIR / "cs-training.csv"          # put your CSV next to this file
+DATA_PATH = APP_DIR / "cs-training.csv"
 
-# We will try multiple hero filenames so case/extension won't break deploys
+# try a few filenames to avoid case/extension surprises on Linux
 HERO_CANDIDATES = [
     ASSETS_DIR / "credit_risk_hero.jpg",
     ASSETS_DIR / "credit_risk_hero.JPG",
     ASSETS_DIR / "credit_risk_hero.jpeg",
-    ASSETS_DIR / "credit_risk_hero.PNG",
     ASSETS_DIR / "credit_risk_hero.png",
+    ASSETS_DIR / "credit_risk_hero.PNG",
 ]
 
-
-# ================== HELPERS ==================
+# ---------- Helpers ----------
 @st.cache_data(show_spinner=False)
 def safe_read_csv(path: Path) -> Optional[pd.DataFrame]:
-    """Return DataFrame or None; never throws."""
     try:
         if path.exists():
             return pd.read_csv(path)
     except Exception as e:
-        st.warning(f"Could not read data file '{path.name}': {e}")
+        st.warning(f"Could not read '{path.name}': {e}")
     return None
 
-
 def load_hero_image() -> Optional[Image.Image]:
-    """
-    Open the hero image robustly:
-    - Try several candidate filenames (case/extension)
-    - Decode bytes with PIL
-    - Convert to RGB to avoid mode issues
-    Returns PIL Image or None.
-    """
     for p in HERO_CANDIDATES:
         try:
             if p.exists():
-                data = p.read_bytes()
-                img = Image.open(BytesIO(data))
+                img = Image.open(BytesIO(p.read_bytes()))
                 if img.mode != "RGB":
                     img = img.convert("RGB")
                 return img
         except Exception:
             continue
     return None
-
 
 def section_header(title: str, subtitle: str | None = None):
     st.markdown(
@@ -84,19 +70,15 @@ def section_header(title: str, subtitle: str | None = None):
         unsafe_allow_html=True,
     )
 
-
 def run_safe(block: Callable[[], None], where: str):
-    """Show a friendly, in-page error instead of a pink app crash."""
     try:
         block()
     except Exception as e:
         st.error(f"Something went wrong in **{where}**.")
         st.exception(e)
 
-
 def gauge(prob: float) -> go.Figure:
-    """Plotly gauge from 0–100% with risk zones."""
-    pct = float(np.clip(prob, 0.0, 1.0)) * 100.0
+    pct = float(np.clip(prob, 0.0, 1.0)) * 100
     fig = go.Figure(
         go.Indicator(
             mode="gauge+number",
@@ -106,32 +88,25 @@ def gauge(prob: float) -> go.Figure:
                 "axis": {"range": [0, 100]},
                 "bar": {"thickness": 0.25},
                 "steps": [
-                    {"range": [0, 25], "color": "#ecfdf5"},    # A (Low)
-                    {"range": [25, 50], "color": "#d1fae5"},   # B
-                    {"range": [50, 75], "color": "#fee2e2"},   # C
-                    {"range": [75, 100], "color": "#fecaca"},  # D (High)
+                    {"range": [0, 25], "color": "#ecfdf5"},   # A
+                    {"range": [25, 50], "color": "#d1fae5"},  # B
+                    {"range": [50, 75], "color": "#fee2e2"},  # C
+                    {"range": [75, 100], "color": "#fecaca"}  # D
                 ],
             },
-            domain={"x": [0, 1], "y": [0, 1]},
         )
     )
     fig.update_layout(margin=dict(l=10, r=10, t=20, b=10), height=260)
     return fig
 
-
 def bucket_from_prob(prob: float) -> str:
-    """A–D buckets from probability."""
     p = float(np.clip(prob, 0.0, 1.0))
-    if p < 0.25:
-        return "A (Low)"
-    if p < 0.50:
-        return "B (Moderate)"
-    if p < 0.75:
-        return "C (Elevated)"
+    if p < 0.25: return "A (Low)"
+    if p < 0.50: return "B (Moderate)"
+    if p < 0.75: return "C (Elevated)"
     return "D (High)"
 
-
-# ================== SIDEBAR ==================
+# ---------- Sidebar ----------
 st.sidebar.title("Navigation")
 sections = [
     "Introduction",
@@ -151,55 +126,46 @@ choice = st.sidebar.radio("Go to", sections, index=0)
 st.sidebar.caption("Data & Assets (Linux is case-sensitive):")
 st.sidebar.code(f"{DATA_PATH.name}\nassets/credit_risk_hero.(jpg/png)")
 
-# Load data once (safe)
 df = safe_read_csv(DATA_PATH)
 
 with st.expander("Diagnostics"):
-    st.write(
-        {
-            "data_exists": DATA_PATH.exists(),
-            "rows": None if df is None else len(df),
-            "cols": None if df is None else df.shape[1],
-            "hero_found": load_hero_image() is not None,
-        }
-    )
+    st.write({
+        "data_exists": DATA_PATH.exists(),
+        "rows": None if df is None else len(df),
+        "cols": None if df is None else df.shape[1],
+        "hero_found": load_hero_image() is not None,
+    })
 
-
-# ================== PAGES ==================
+# ---------- Pages ----------
 if choice == "Introduction":
     def _page():
         section_header(
             "Loan Default Risk — Executive Overview",
-            "A streamlined view of the dataset, quality checks, and core findings.",
+            "A quick tour of the data, a glance at quality, and how we’ll read risk.",
         )
 
         img = load_hero_image()
         if img is not None:
-            st.image(img, use_container_width=True)
+            # IMPORTANT: no 'use_container_width' (older Streamlit rejects it)
+            st.image(img)
         else:
-            st.info(
-                "Hero image not found. Place `credit_risk_hero.jpg` (or .png) inside **assets/**."
-            )
+            st.info("Hero image not found. Put `credit_risk_hero.jpg` (or .png) into **assets/**.")
 
         c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("Rows", f"{0 if df is None else len(df):,}")
-        with c2:
-            st.metric("Columns", f"{0 if df is None else df.shape[1]}")
-        with c3:
-            st.metric("Target", "SeriousDlqin2yrs")
+        with c1: st.metric("Rows", f"{0 if df is None else len(df):,}")
+        with c2: st.metric("Columns", f"{0 if df is None else df.shape[1]}")
+        with c3: st.metric("Target", "SeriousDlqin2yrs")
 
-        st.subheader("Quick Preview")
+        st.subheader("Peek at the data")
         if df is not None:
             st.dataframe(df.head(10), use_container_width=True)
         else:
-            st.warning("No data loaded yet — add `cs-training.csv` next to this file.")
+            st.warning("No data yet — place `cs-training.csv` next to this file.")
     run_safe(_page, "Introduction")
-
 
 elif choice == "Feature Distributions":
     def _page():
-        section_header("Feature Distributions", "Robust histogram via `pd.cut` + counts.")
+        section_header("Feature Distributions", "Simple histograms using binned counts.")
         if df is None:
             st.warning("Data not available.")
             return
@@ -208,31 +174,27 @@ elif choice == "Feature Distributions":
             st.info("No numeric columns found.")
             return
         feature = st.selectbox("Feature", num_cols, index=0)
-        bins = st.slider("Number of bins", 5, 60, 20)
+        bins = st.slider("Bins", 5, 60, 20)
         s = df[feature].dropna()
         counts = pd.cut(s, bins=bins).value_counts().sort_index()
         st.bar_chart(counts)
     run_safe(_page, "Feature Distributions")
 
-
 elif choice == "Relationships & Segments":
     def _page():
-        section_header("Relationships & Segments", "Simple scatter (numeric only).")
+        section_header("Relationships & Segments", "Quick scatter between two numeric fields.")
         if df is None:
             st.warning("Data not available.")
             return
-        num_cols = df.select_dtypes(include=["number"]).columns.tolist()
-        if len(num_cols) < 2:
+        num = df.select_dtypes(include=["number"]).columns.tolist()
+        if len(num) < 2:
             st.info("Need at least two numeric columns.")
             return
         c1, c2 = st.columns(2)
-        with c1:
-            x = st.selectbox("X", num_cols, index=0, key="x_rel")
-        with c2:
-            y = st.selectbox("Y", num_cols, index=1 if len(num_cols) > 1 else 0, key="y_rel")
+        with c1: x = st.selectbox("X", num, index=0, key="x_rel")
+        with c2: y = st.selectbox("Y", num, index=1 if len(num) > 1 else 0, key="y_rel")
         st.scatter_chart(df[[x, y]].dropna())
     run_safe(_page, "Relationships & Segments")
-
 
 elif choice == "Correlations & Outliers":
     def _page():
@@ -251,103 +213,71 @@ elif choice == "Correlations & Outliers":
         st.dataframe(corr, use_container_width=True)
     run_safe(_page, "Correlations & Outliers")
 
-
 elif choice == "Interactive Lab":
-    def _page():
-        section_header("Interactive Lab")
-        st.info("Sandbox area for experiments (kept light for reliability).")
-    run_safe(_page, "Interactive Lab")
-
+    run_safe(lambda: (section_header("Interactive Lab"),
+                      st.info("Scratch space for quick tests.")),
+             "Interactive Lab")
 
 elif choice == "Modeling & Metrics":
-    def _page():
-        section_header("Modeling & Metrics")
-        st.info("Hook your trained model here (placeholder to remain stable).")
-    run_safe(_page, "Modeling & Metrics")
-
+    run_safe(lambda: (section_header("Modeling & Metrics"),
+                      st.info("Drop in your trained model later. Page kept light to stay reliable.")),
+             "Modeling & Metrics")
 
 elif choice == "Risk Buckets (A–D)":
-    def _page():
-        section_header("Risk Buckets (A–D)")
-        st.info("Add your A–D bucket logic or thresholds here (placeholder).")
-    run_safe(_page, "Risk Buckets (A–D)")
-
+    run_safe(lambda: (section_header("Risk Buckets (A–D)"),
+                      st.info("Describe or tune your cut-offs here. Placeholder for now.")),
+             "Risk Buckets (A–D)")
 
 elif choice == "Client Credit Check":
     def _page():
-        section_header("Client Credit Check", "Quick calculator with gauge and A–D bucket.")
+        section_header("Client Credit Check", "Quick calculator with a gauge and A–D label.")
 
-        # Inputs similar to cs-training.csv features (names kept simple)
         col1, col2, col3 = st.columns(3)
         with col1:
-            age = st.number_input("Age", min_value=18, max_value=120, value=35, step=1)
-            debt_ratio = st.number_input("DebtRatio (0–5)", min_value=0.0, max_value=5.0, value=0.3, step=0.01)
-            monthly_income = st.number_input("MonthlyIncome", min_value=0, max_value=1_000_000, value=5000, step=100)
+            age = st.number_input("Age", 18, 120, 35, 1)
+            debt_ratio = st.number_input("DebtRatio (0–5)", 0.0, 5.0, 0.30, 0.01)
+            monthly_income = st.number_input("MonthlyIncome", 0, 1_000_000, 5000, 100)
         with col2:
-            late_30 = st.number_input("30–59 Days Late (last 2y)", min_value=0, max_value=50, value=0, step=1)
-            late_60 = st.number_input("60–89 Days Late (last 2y)", min_value=0, max_value=50, value=0, step=1)
-            late_90 = st.number_input("90+ Days Late (ever)", min_value=0, max_value=50, value=0, step=1)
+            late_30 = st.number_input("30–59 Days Late (2y)", 0, 50, 0, 1)
+            late_60 = st.number_input("60–89 Days Late (2y)", 0, 50, 0, 1)
+            late_90 = st.number_input("90+ Days Late (ever)", 0, 50, 0, 1)
         with col3:
-            open_loans = st.number_input("NumberOfOpenCreditLinesAndLoans", min_value=0, max_value=99, value=6, step=1)
-            utilization = st.number_input("RevolvingUtilizationOfUnsecuredLines (0–5)", min_value=0.0, max_value=5.0, value=0.25, step=0.01)
-            dependents = st.number_input("NumberOfDependents", min_value=0, max_value=20, value=0, step=1)
+            open_loans = st.number_input("Open Credit Lines/Loans", 0, 99, 6, 1)
+            utilization = st.number_input("Revolving Utilization (0–5)", 0.0, 5.0, 0.25, 0.01)
+            dependents = st.number_input("Dependents", 0, 20, 0, 1)
 
-        # Stable, transparent scoring (not a trained model; avoids dependency/risk)
-        # Normalize into 0..1 contributors; higher -> higher risk
         def clip01(x): return float(np.clip(x, 0.0, 1.0))
-
-        # Heuristics inspired by dataset semantics
-        risk_parts = {
-            "age": clip01((50 - age) / 50.0),  # younger slightly riskier
-            "debt_ratio": clip01(debt_ratio / 1.0),  # >1 is very high; clipped later
-            "income": clip01(1.0 - (monthly_income / 15000.0)),  # higher income -> lower risk
-            "lates_30": clip01(late_30 / 5.0),
-            "lates_60": clip01(late_60 / 3.0),
-            "lates_90": clip01(late_90 / 2.0),
-            "open_loans": clip01(abs(open_loans - 7) / 14.0),  # too few or too many slightly worse
+        parts = {
+            "age": clip01((50 - age) / 50.0),
+            "debt_ratio": clip01(debt_ratio / 1.0),
+            "income": clip01(1.0 - (monthly_income / 15000.0)),
+            "late30": clip01(late_30 / 5.0),
+            "late60": clip01(late_60 / 3.0),
+            "late90": clip01(late_90 / 2.0),
+            "open": clip01(abs(open_loans - 7) / 14.0),
             "util": clip01(utilization / 1.0),
             "deps": clip01(dependents / 6.0),
         }
-
-        # Weighted sum -> probability
-        weights = {
-            "age": 0.05,
-            "debt_ratio": 0.15,
-            "income": 0.10,
-            "lates_30": 0.15,
-            "lates_60": 0.15,
-            "lates_90": 0.20,
-            "open_loans": 0.05,
-            "util": 0.10,
-            "deps": 0.05,
-        }
-        score = sum(risk_parts[k] * weights[k] for k in weights)  # 0..1
-        prob = float(np.clip(score, 0.0, 1.0))
+        weights = {"age":0.05,"debt_ratio":0.15,"income":0.10,"late30":0.15,
+                   "late60":0.15,"late90":0.20,"open":0.05,"util":0.10,"deps":0.05}
+        prob = float(np.clip(sum(parts[k]*weights[k] for k in weights), 0.0, 1.0))
         bucket = bucket_from_prob(prob)
 
         gcol, tcol = st.columns([1.2, 1])
-        with gcol:
-            st.plotly_chart(gauge(prob), use_container_width=True)
+        with gcol: st.plotly_chart(gauge(prob), use_container_width=True)
         with tcol:
-            st.subheader("Risk Result")
+            st.subheader("Result")
             st.metric("Estimated default probability", f"{prob*100:.1f}%")
             st.metric("Bucket", bucket)
-
-            st.caption("Breakdown (higher values = more risk):")
-            st.json({k: round(v, 3) for k, v in risk_parts.items()})
-
-        st.info(
-            "This is a simple heuristic scorer (exam-safe). Replace with your trained model later if needed."
-        )
+            st.caption("What pushed the score:")
+            st.json({k: round(v, 3) for k, v in parts.items()})
+        st.info("This is a lightweight heuristic for demo purposes. Swap in a trained model later if required.")
     run_safe(_page, "Client Credit Check")
 
-
 elif choice == "Saved Figures":
-    def _page():
-        section_header("Saved Figures")
-        st.info("Render exported charts/images here if present in a folder.")
-    run_safe(_page, "Saved Figures")
-
+    run_safe(lambda: (section_header("Saved Figures"),
+                      st.info("Drop any exported charts here and render them.")),
+             "Saved Figures")
 
 elif choice == "Data Quality":
     def _page():
@@ -356,17 +286,12 @@ elif choice == "Data Quality":
             st.warning("Data not available.")
             return
         st.subheader("Null counts")
-        nulls = df.isna().sum().to_frame("nulls")
-        st.dataframe(nulls, use_container_width=True)
+        st.dataframe(df.isna().sum().to_frame("nulls"), use_container_width=True)
     run_safe(_page, "Data Quality")
 
-
 elif choice == "Summary & Conclusion":
-    def _page():
-        section_header("Summary & Conclusion")
-        st.success("Stable build: menu intact, hero image hardened, calculator restored.")
-    run_safe(_page, "Summary & Conclusion")
+    run_safe(lambda: (section_header("Summary & Conclusion"),
+                      st.success("Stable build: image fixed, calculator restored, sections guarded.")),
+             "Summary & Conclusion")
 
-
-# ================== FOOTER ==================
 st.caption("© Loan Default Exam Project — Streamlit build (stable).")
