@@ -22,7 +22,9 @@ st.set_page_config(
 APP_DIR = Path(__file__).parent
 ASSETS_DIR = APP_DIR / "assets"
 DATA_PATH = APP_DIR / "cs-training.csv"                 # put your CSV next to this file
-HERO_PATH = ASSETS_DIR / "credit_risk_hero.JPG"         # exact filename & case
+HERO_PATH = ASSETS_DIR / "credit_risk_hero.jpg"
+
+# exact filename & case
 
 # -------------------- HELPERS --------------------
 @st.cache_data(show_spinner=False)
