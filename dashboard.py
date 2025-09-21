@@ -438,29 +438,30 @@ elif page == "Interactive Lab":
         age_rng = colF1.slider("Age range", min(18, amin), max(amax, 18), (min(18, amin), amax))
     else:
         age_rng = None
+    # Monthly income range — default cap at 100k; toggle for very high values
     if "MonthlyIncome" in df_full.columns and df_full["MonthlyIncome"].notna().any():
         mi_min = float(df_full["MonthlyIncome"].min())
         mi_max = float(df_full["MonthlyIncome"].max())
         mi_95 = float(np.nanpercentile(df_full["MonthlyIncome"].dropna(), 95))
-        # keep slider usable; cap extreme tails at 20k
-        mi_95_capped = float(min(mi_95, 20_000))
+
+        # Default view: keep the slider usable (cap at 100k)
+        show_high = colF2.checkbox("Allow very high incomes", value=False,
+                                   help="Tick to explore incomes above 100,000")
+        slider_cap = 3_000_000 if show_high else 100_000
+
+        # upper bound for the control and its default position
+        slider_max = float(min(mi_max, slider_cap))
+        default_hi = float(min(mi_95, slider_max))
+        default_lo = float(np.nan_to_num(mi_min, nan=0.0))
+
         income_rng = colF2.slider(
             "Monthly income range",
-            float(np.nan_to_num(mi_min, nan=0.0)),
-            mi_95_capped,
-            (float(np.nan_to_num(mi_min, nan=0.0)), mi_95_capped),
+            min_value=default_lo,
+            max_value=slider_max,
+            value=(default_lo, default_hi),
         )
     else:
         income_rng = None
-    del_cols = [c for c in ["NumberOfTime30-59DaysPastDueNotWorse","NumberOfTime60-89DaysPastDueNotWorse","NumberOfTimes90DaysLate"] if c in df_full.columns]
-    require_del = st.checkbox("Only rows with any past-due > 0", value=False)
-
-    mask = pd.Series(True, index=df_full.index)
-    if age_rng and "age" in df_full.columns: mask &= df_full["age"].between(age_rng[0], age_rng[1], inclusive="both")
-    if income_rng and "MonthlyIncome" in df_full.columns:
-        mi0, mi1 = income_rng; mask &= df_full["MonthlyIncome"].fillna(-1e12).between(mi0, mi1, inclusive="both")
-    if require_del and del_cols: mask &= (df_full[del_cols].fillna(0) > 0).any(axis=1)
-    df = df_full[mask].copy()
 
     section_title("Interactive — default rate by bins")
     choices = [c for c in ["age","MonthlyIncome","DebtRatio","RevolvingUtilizationOfUnsecuredLines"] if c in df.columns]
