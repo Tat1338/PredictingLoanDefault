@@ -1,8 +1,4 @@
-# dashboard.py — stable, human-written copy + working image, gauge & calculator
-# Notes:
-# - No 'use_container_width' on st.image (compat with older Streamlit on Cloud)
-# - Hero image opened via PIL to avoid type errors
-# - Each page wrapped safely so the whole app never hard-crashes
+# dashboard.py — clean intro, centered hero, sidebar diagnostics, stable pages + gauge
 
 from __future__ import annotations
 
@@ -17,17 +13,13 @@ import plotly.graph_objects as go
 from PIL import Image
 
 # ---------- App setup ----------
-st.set_page_config(
-    page_title="Loan Default — Dashboard",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="Loan Default — Dashboard", layout="wide", initial_sidebar_state="expanded")
 
 APP_DIR = Path(__file__).parent
 ASSETS_DIR = APP_DIR / "assets"
 DATA_PATH = APP_DIR / "cs-training.csv"
 
-# try a few filenames to avoid case/extension surprises on Linux
+# Try a few filenames to avoid case/extension trouble on Linux
 HERO_CANDIDATES = [
     ASSETS_DIR / "credit_risk_hero.jpg",
     ASSETS_DIR / "credit_risk_hero.JPG",
@@ -35,6 +27,7 @@ HERO_CANDIDATES = [
     ASSETS_DIR / "credit_risk_hero.png",
     ASSETS_DIR / "credit_risk_hero.PNG",
 ]
+HERO_MAX_WIDTH = 900  # pixels (safe—older Streamlit supports width=)
 
 # ---------- Helpers ----------
 @st.cache_data(show_spinner=False)
@@ -62,7 +55,7 @@ def section_header(title: str, subtitle: str | None = None):
     st.markdown(
         f"""
         <div style="background:#0f766e0d;border:1px solid #0f766e22;
-                    padding:14px 18px;border-radius:12px;margin:4px 0 16px 0;">
+                    padding:16px 18px;border-radius:12px;margin:4px 0 18px 0;">
             <div style="font-size:26px;font-weight:800;color:#0f766e;">{title}</div>
             {"<div style='opacity:.85;margin-top:6px'>" + subtitle + "</div>" if subtitle else ""}
         </div>
@@ -123,38 +116,45 @@ sections = [
 ]
 choice = st.sidebar.radio("Go to", sections, index=0)
 
-st.sidebar.caption("Data & Assets (Linux is case-sensitive):")
-st.sidebar.code(f"{DATA_PATH.name}\nassets/credit_risk_hero.(jpg/png)")
-
-df = safe_read_csv(DATA_PATH)
-
-with st.expander("Diagnostics"):
+# Move diagnostics to the sidebar so it’s out of the way
+diag = st.sidebar.expander("Diagnostics", expanded=False)
+with diag:
+    df_probe = safe_read_csv(DATA_PATH)  # light call; cached
     st.write({
         "data_exists": DATA_PATH.exists(),
-        "rows": None if df is None else len(df),
-        "cols": None if df is None else df.shape[1],
+        "rows": None if df_probe is None else len(df_probe),
+        "cols": None if df_probe is None else df_probe.shape[1],
         "hero_found": load_hero_image() is not None,
     })
+st.sidebar.caption("Files (Linux is case-sensitive):")
+st.sidebar.code(f"{DATA_PATH.name}\nassets/credit_risk_hero.(jpg/png)")
+
+# Load data once for pages
+df = df_probe
 
 # ---------- Pages ----------
 if choice == "Introduction":
     def _page():
         section_header(
             "Loan Default Risk — Executive Overview",
-            "A quick tour of the data, a glance at quality, and how we’ll read risk.",
+            "A quick look at the data, a short quality check, and how we’ll talk about risk.",
         )
 
+        # Center the hero image with a simple column trick and a safe width
         img = load_hero_image()
         if img is not None:
-            # IMPORTANT: no 'use_container_width' (older Streamlit rejects it)
-            st.image(img)
+            left, mid, right = st.columns([1, 3, 1])
+            with mid:
+                w = min(HERO_MAX_WIDTH, getattr(img, "width", HERO_MAX_WIDTH))
+                st.image(img, width=w)
         else:
             st.info("Hero image not found. Put `credit_risk_hero.jpg` (or .png) into **assets/**.")
 
-        c1, c2, c3 = st.columns(3)
-        with c1: st.metric("Rows", f"{0 if df is None else len(df):,}")
-        with c2: st.metric("Columns", f"{0 if df is None else df.shape[1]}")
-        with c3: st.metric("Target", "SeriousDlqin2yrs")
+        # Clean, consistent metrics row
+        m1, m2, m3 = st.columns(3)
+        with m1: st.metric("Rows", f"{0 if df is None else len(df):,}")
+        with m2: st.metric("Columns", f"{0 if df is None else df.shape[1]}")
+        with m3: st.metric("Target", "SeriousDlqin2yrs")
 
         st.subheader("Peek at the data")
         if df is not None:
@@ -167,12 +167,10 @@ elif choice == "Feature Distributions":
     def _page():
         section_header("Feature Distributions", "Simple histograms using binned counts.")
         if df is None:
-            st.warning("Data not available.")
-            return
+            st.warning("Data not available."); return
         num_cols = df.select_dtypes(include=["number"]).columns.tolist()
         if not num_cols:
-            st.info("No numeric columns found.")
-            return
+            st.info("No numeric columns found."); return
         feature = st.selectbox("Feature", num_cols, index=0)
         bins = st.slider("Bins", 5, 60, 20)
         s = df[feature].dropna()
@@ -184,12 +182,10 @@ elif choice == "Relationships & Segments":
     def _page():
         section_header("Relationships & Segments", "Quick scatter between two numeric fields.")
         if df is None:
-            st.warning("Data not available.")
-            return
+            st.warning("Data not available."); return
         num = df.select_dtypes(include=["number"]).columns.tolist()
         if len(num) < 2:
-            st.info("Need at least two numeric columns.")
-            return
+            st.info("Need at least two numeric columns."); return
         c1, c2 = st.columns(2)
         with c1: x = st.selectbox("X", num, index=0, key="x_rel")
         with c2: y = st.selectbox("Y", num, index=1 if len(num) > 1 else 0, key="y_rel")
@@ -200,12 +196,10 @@ elif choice == "Correlations & Outliers":
     def _page():
         section_header("Correlations & Outliers", "Pearson correlation matrix.")
         if df is None:
-            st.warning("Data not available.")
-            return
+            st.warning("Data not available."); return
         num_df = df.select_dtypes(include=["number"])
         if num_df.empty:
-            st.info("No numeric columns to correlate.")
-            return
+            st.info("No numeric columns to correlate."); return
         try:
             corr = num_df.corr(numeric_only=True)
         except TypeError:
@@ -271,7 +265,7 @@ elif choice == "Client Credit Check":
             st.metric("Bucket", bucket)
             st.caption("What pushed the score:")
             st.json({k: round(v, 3) for k, v in parts.items()})
-        st.info("This is a lightweight heuristic for demo purposes. Swap in a trained model later if required.")
+        st.info("Lightweight heuristic for demo purposes. Swap in a trained model later if required.")
     run_safe(_page, "Client Credit Check")
 
 elif choice == "Saved Figures":
@@ -283,15 +277,14 @@ elif choice == "Data Quality":
     def _page():
         section_header("Data Quality")
         if df is None:
-            st.warning("Data not available.")
-            return
+            st.warning("Data not available."); return
         st.subheader("Null counts")
         st.dataframe(df.isna().sum().to_frame("nulls"), use_container_width=True)
     run_safe(_page, "Data Quality")
 
 elif choice == "Summary & Conclusion":
     run_safe(lambda: (section_header("Summary & Conclusion"),
-                      st.success("Stable build: image fixed, calculator restored, sections guarded.")),
+                      st.success("Clean intro, centered image, sidebar diagnostics, and the calculator is back.")),
              "Summary & Conclusion")
 
 st.caption("© Loan Default Exam Project — Streamlit build (stable).")
