@@ -1,12 +1,10 @@
-# dashboard.py
-# Streamlit dashboard for the Loan Default Exam Project
-# - Robust image loading (reads bytes) so Streamlit Cloud won't crash
-# - Menu preserved; each section guarded so missing files don't break the app
-# - Safe CSV loader (handles absent file gracefully)
+# dashboard.py — stable build (no pink errors)
+# - Safe, bytes-based image loading
+# - Guarded pages (won’t crash if data/image missing)
+# - Simplified charts (no numpy histogram pitfalls)
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -23,8 +21,8 @@ st.set_page_config(
 
 APP_DIR = Path(__file__).parent
 ASSETS_DIR = APP_DIR / "assets"
-DATA_PATH = APP_DIR / "cs-training.csv"   # adjust if your file lives elsewhere
-HERO_PATH = ASSETS_DIR / "credit_risk_hero.JPG"   # your exact filename
+DATA_PATH = APP_DIR / "cs-training.csv"                 # put your CSV next to this file
+HERO_PATH = ASSETS_DIR / "credit_risk_hero.JPG"         # exact filename & case
 
 # -------------------- HELPERS --------------------
 @st.cache_data(show_spinner=False)
@@ -37,9 +35,6 @@ def safe_read_csv(path: Path) -> Optional[pd.DataFrame]:
     return None
 
 def load_image_bytes(path: Path) -> Optional[bytes]:
-    """
-    Read image bytes safely. Returns None if not found or unreadable.
-    """
     try:
         if path.exists():
             return path.read_bytes()
@@ -58,16 +53,8 @@ def section_header(title: str, subtitle: str | None = None):
         unsafe_allow_html=True,
     )
 
-def small_tag(text: str):
-    st.markdown(
-        f"<span style='background:#e6fffa;border:1px solid #99f6e4;color:#0f766e;"
-        f"padding:3px 8px;border-radius:999px;font-size:12px'>{text}</span>",
-        unsafe_allow_html=True,
-    )
-
 # -------------------- SIDEBAR --------------------
 st.sidebar.title("Navigation")
-
 sections = [
     "Introduction",
     "Feature Distributions",
@@ -81,39 +68,35 @@ sections = [
     "Data Quality",
     "Summary & Conclusion",
 ]
-
 choice = st.sidebar.radio("Go to", sections, index=0)
 
-# Data source chip
-st.sidebar.write("")
-st.sidebar.caption("Data source:")
-small_tag(DATA_PATH.name)
+st.sidebar.caption("Data file:")
+st.sidebar.code(DATA_PATH.name)
 
 # Load data once (safe)
 df = safe_read_csv(DATA_PATH)
 
 # -------------------- PAGES --------------------
 if choice == "Introduction":
-    section_header("Loan Default Risk — Executive Overview",
-                   "A streamlined view of the dataset, quality checks, and core findings.")
-    # HERO IMAGE at top (bytes-safe)
+    section_header(
+        "Loan Default Risk — Executive Overview",
+        "A streamlined view of the dataset, quality checks, and core findings.",
+    )
+
     hero = load_image_bytes(HERO_PATH)
     if hero:
         st.image(hero, use_container_width=True)
     else:
         st.info(
-            "Hero image not found. Place your file at "
-            f"`assets/{HERO_PATH.name}` (Linux is case-sensitive)."
+            "Hero image not found. Place the file at "
+            f"`assets/{HERO_PATH.name}` (remember Linux is case-sensitive)."
         )
 
-    st.markdown("### Project Snapshot")
     col1, col2, col3 = st.columns(3)
     with col1:
-        n_rows = 0 if df is None else len(df)
-        st.metric("Rows", f"{n_rows:,}")
+        st.metric("Rows", f"{0 if df is None else len(df):,}")
     with col2:
-        n_cols = 0 if df is None else df.shape[1]
-        st.metric("Columns", f"{n_cols}")
+        st.metric("Columns", f"{0 if df is None else df.shape[1]}")
     with col3:
         st.metric("Target", "SeriousDlqin2yrs")
 
@@ -124,7 +107,7 @@ if choice == "Introduction":
         st.warning("No data loaded yet — add `cs-training.csv` to the app folder.")
 
 elif choice == "Feature Distributions":
-    section_header("Feature Distributions")
+    section_header("Feature Distributions", "Histogram via value counts (stable).")
     if df is None:
         st.warning("Data not available.")
     else:
@@ -132,12 +115,16 @@ elif choice == "Feature Distributions":
         if not numeric_cols:
             st.info("No numeric columns found.")
         else:
-            feature = st.selectbox("Choose a feature", numeric_cols, index=0)
-            bins = st.slider("Bins", 10, 100, 40, step=5)
-            st.bar_chart(np.histogram(df[feature].dropna(), bins=bins)[0])
+            feature = st.selectbox("Feature", numeric_cols, index=0)
+            bins = st.slider("Number of bins", 5, 60, 20)
+            # Use pd.cut + value_counts (avoids numpy histogram shape/dtype issues)
+            s = df[feature].dropna()
+            binned = pd.cut(s, bins=bins)
+            counts = binned.value_counts().sort_index()
+            st.bar_chart(counts)
 
 elif choice == "Relationships & Segments":
-    section_header("Relationships & Segments")
+    section_header("Relationships & Segments", "Simple scatter (numeric only).")
     if df is None:
         st.warning("Data not available.")
     else:
@@ -145,12 +132,12 @@ elif choice == "Relationships & Segments":
         if len(num_cols) < 2:
             st.info("Need at least two numeric columns.")
         else:
-            x = st.selectbox("X", num_cols, index=0)
-            y = st.selectbox("Y", num_cols, index=min(1, len(num_cols)-1))
+            x = st.selectbox("X", num_cols, index=0, key="x_rel")
+            y = st.selectbox("Y", num_cols, index=1 if len(num_cols) > 1 else 0, key="y_rel")
             st.scatter_chart(df[[x, y]].dropna())
 
 elif choice == "Correlations & Outliers":
-    section_header("Correlations & Outliers")
+    section_header("Correlations & Outliers", "Pearson correlation matrix.")
     if df is None:
         st.warning("Data not available.")
     else:
@@ -158,24 +145,28 @@ elif choice == "Correlations & Outliers":
         if num_df.empty:
             st.info("No numeric columns to correlate.")
         else:
-            corr = num_df.corr(numeric_only=True)
+            # numeric_only=True is safe on modern pandas; fallback guard added
+            try:
+                corr = num_df.corr(numeric_only=True)
+            except TypeError:
+                corr = num_df.corr()
             st.dataframe(corr, use_container_width=True)
 
 elif choice == "Interactive Lab":
     section_header("Interactive Lab")
-    st.info("Add your experiments here. The page is intentionally light to ensure reliability.")
+    st.info("Add your experiments here. Page intentionally light to guarantee stability.")
 
 elif choice == "Modeling & Metrics":
     section_header("Modeling & Metrics")
-    st.info("Hook in your trained model here. This page is stubbed to avoid runtime errors.")
+    st.info("Hook your trained model here. Stubbed to avoid runtime errors.")
 
 elif choice == "Risk Buckets (A–D)":
     section_header("Risk Buckets (A–D)")
-    st.info("Provide your A–D bucket logic here. Currently a placeholder to keep the app stable.")
+    st.info("Provide your A–D bucket logic here. Placeholder for now.")
 
 elif choice == "Client Credit Check":
     section_header("Client Credit Check")
-    st.info("Form inputs can be added here to run single-client checks safely.")
+    st.info("Add form inputs to run single-client checks. Placeholder for now.")
 
 elif choice == "Saved Figures":
     section_header("Saved Figures")
