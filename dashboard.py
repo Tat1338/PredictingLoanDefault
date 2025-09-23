@@ -944,8 +944,7 @@ elif page == "Data Quality":
 # ---------------- 11) Summary & Conclusion ----------------
 elif page == "Summary & Conclusion":
     big_title("Summary & Conclusion")
-    st.markdown(
-        st.markdown("""
+    st.markdown("""
     **Summary & Conclusion**
 
     Looking across the whole study, default risk in this dataset isn’t about a single dramatic variable; it’s the stack of medium-size pressures that add up. The clearest pattern is capacity strain. Borrowers with **very high revolving utilization** and a **heavy debt ratio** sit in the thick end of long right-tailed distributions, and those tails are where risk concentrates. A second, simple but strong divider is **any past-due history**: the delinquency counts are zero-inflated, and the moment they flip from 0 to ≥1, risk steps up sharply. These signals often travel with **lower reported income**, **younger age bands**, and **more open credit lines**. Risk also ticks up from **two to three (or more) dependents**, which likely reflects tighter monthly budgets rather than something inherently “risky” about family size. Correlation heatmaps and partial plots tell a similar story: utilization and debt ratio rise together, and their effect on risk is non-linear rather than smooth.
