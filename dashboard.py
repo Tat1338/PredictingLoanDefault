@@ -25,6 +25,9 @@ from sklearn.metrics import (
 from sklearn.calibration import calibration_curve
 from sklearn.inspection import permutation_importance
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 # ---------------- Page + Styles ----------------
 st.set_page_config(page_title="Loan Default — Dashboard", layout="wide")
 
