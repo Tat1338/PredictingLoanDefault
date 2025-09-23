@@ -1,0 +1,12 @@
+name: Keep Streamlit Awake
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # every 15 minutes
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit the app URL
+        run: |
+          curl -s -L https://predictingloandefault.streamlit.app > /dev/null
