@@ -944,20 +944,15 @@ elif page == "Data Quality":
 # ---------------- 11) Summary & Conclusion ----------------
 elif page == "Summary & Conclusion":
     big_title("Summary & Conclusion")
+
+    # Single, fuller conclusion (replaces the old one-liner)
     st.markdown("""
-    **Summary & Conclusion**
+Default risk in this dataset doesn’t hinge on one dramatic variable; it rises when several ordinary pressures stack up. The clearest pattern is **capacity strain**: very high **card/line utilization** and a heavy **debt ratio** live in long right-tails, and those tails are where defaults concentrate. A clean/no-late history acts like a gate—once **any past-due** appears (30–59, 60–89, or 90+ days), the risk steps up sharply. These signals often arrive together with **lower reported income**, **younger age bands**, **many open credit lines/loans**, and **three or more dependents**, which likely reflects tighter monthly budgets rather than something inherently risky about family size. The correlation and bin charts tell the same story: utilization and debt ratio move together, and their relationship with default is **non-linear**—risk climbs slowly at first and faster once balances crowd the limits.
 
-    Looking across the whole study, default risk in this dataset isn’t about a single dramatic variable; it’s the stack of medium-size pressures that add up. The clearest pattern is capacity strain. Borrowers with **very high revolving utilization** and a **heavy debt ratio** sit in the thick end of long right-tailed distributions, and those tails are where risk concentrates. A second, simple but strong divider is **any past-due history**: the delinquency counts are zero-inflated, and the moment they flip from 0 to ≥1, risk steps up sharply. These signals often travel with **lower reported income**, **younger age bands**, and **more open credit lines**. Risk also ticks up from **two to three (or more) dependents**, which likely reflects tighter monthly budgets rather than something inherently “risky” about family size. Correlation heatmaps and partial plots tell a similar story: utilization and debt ratio rise together, and their effect on risk is non-linear rather than smooth.
+The model behaves consistently with the visuals. A simple **logistic regression** gives a sensible baseline; a **random-forest** version catches the non-linear bits and ranks the top-risk slice better. After **calibration**, scores behave like probabilities, which makes the **A–D buckets** and the **threshold slider** useful knobs rather than black-box output. In practical terms: clients who keep balances well below limits, stay current on payments, and avoid stacking new credit lines rarely show up in the high-risk bands; risk clusters where capacity is tight and recent repayments have slipped. Treat these results as **directional** (static snapshot, imperfect income reporting), but they are stable across methods and segments and line up with common credit practice.
+""")
 
-    Model results were consistent with what the charts suggested. **Logistic regression** gave a clean, transparent baseline with sensible odds shifts that matched domain intuition (utilization ↑ → odds of default ↑). **Random forest** captured the non-linearities and interactions the linear model can’t, and ranked cases better in the high-risk bands, which is exactly where decisions matter most. After **calibration**, scores behaved like real probabilities rather than over-confident scores; reliability curves flattened and the predicted risk aligned more closely with observed outcomes. Threshold sweeps made the trade-off explicit: if you lower the cut-off, you **catch more true defaults** (higher recall) but **flag more non-defaulters** (lower precision); raising it does the opposite. There isn’t a single “right” threshold—there’s an operating point that matches a lender’s tolerance for missed defaults versus false alarms.
-
-    Practically, the takeaway is straightforward. People who keep balances modest relative to their limits, avoid recent late payments, and don’t accumulate many concurrent credit lines are far less represented in the top-risk slices. The features the models leaned on—**utilization, recent delinquencies, and debt ratio**—are also levers a borrower can actually influence over time. For deployment, I would keep the logistic model as a readable benchmark, use the calibrated random forest for day-to-day scoring, and **monitor** a few things monthly: (1) the distribution of utilization and debt ratio (drift risk), (2) the calibration curve (does probability still match reality?), and (3) the approval rate at the chosen threshold. Limitations remain: this is a static snapshot without a true out-of-time split, and several variables (notably income) carry missingness that may reflect reporting rather than behavior. So the results should be treated as **directional guidance** rather than hard policy. Even so, the patterns are stable across methods: default risk clusters where repayment capacity is stretched and recent behavior has slipped, and it recedes when balances and history are kept clean.
-
-    ---
-
-    **In everyday terms:** People get into trouble when balances sit near their limits, late payments start to appear, and a large chunk of income is already tied up in debt. Those pressures often come together, especially for younger borrowers or households with three or more dependents. Keeping balances modest and payments current reduces risk the most. Our model doesn’t hand down a verdict; it gives a probability so policy makers can choose how cautious to be. If we lower the cut-off, we catch more likely defaults but review more good cases; if we raise it, we approve more people but may miss some risk.
-    """)
-
+    # Ensure we have scores available for the summary tables
     if "__y_proba__" not in st.session_state:
         y_all = df_full["SeriousDlqin2yrs"].astype(int)
         X_cols_all = [c for c in df_full.columns if c != "SeriousDlqin2yrs" and pd.api.types.is_numeric_dtype(df_full[c])]
@@ -970,12 +965,15 @@ elif page == "Summary & Conclusion":
         st.session_state["__y_test__"] = yte.tolist()
         st.session_state["__y_proba__"] = y_pr.tolist()
 
+    # Build scored frame with some extras for display
     idx = st.session_state["__X_test_index__"]
     y_test = st.session_state["__y_test__"]
     y_proba = st.session_state["__y_proba__"]
     scored = pd.DataFrame({"prob_default": y_proba, "true_label": y_test}, index=idx)
     extras = [c for c in ["MonthlyIncome","age","NumberOfOpenCreditLinesAndLoans","NumberOfDependents"] if c in df_full.columns]
     scored = scored.join(df_full.loc[scored.index, extras])
+
+    # Simple quartile buckets A–D on predicted probability
     scored["bucket"] = pd.qcut(scored["prob_default"], q=4, labels=list("ABCD"))
 
     section_title("Bucket table (A least risky → D most risky)")
@@ -993,6 +991,7 @@ elif page == "Summary & Conclusion":
     tbl = tbl.reset_index().rename(columns={"bucket":"Bucket","Avg_Default_Prob":"Avg default (%)"})
     st.dataframe(tbl, use_container_width=True)
 
+    # Examples tables
     colA, colD = st.columns(2)
     with colA:
         section_title("Examples — good clients (Bucket A)")
@@ -1000,7 +999,7 @@ elif page == "Summary & Conclusion":
             scored[scored["bucket"]=="A"]
             .sort_values("prob_default", ascending=True)
             .head(10)[["prob_default"]+extras]
-            .assign(**{"prob_default": lambda d: (100*d["prob_default"]).round(1)} )
+            .assign(**{"prob_default": lambda d: (100*d["prob_default"]).round(1)})
             .rename(columns={"prob_default":"Pred default (%)"}),
             use_container_width=True
         )
@@ -1010,7 +1009,7 @@ elif page == "Summary & Conclusion":
             scored[scored["bucket"]=="D"]
             .sort_values("prob_default", ascending=False)
             .head(10)[["prob_default"]+extras]
-            .assign(**{"prob_default": lambda d: (100*d["prob_default"]).round(1)} )
+            .assign(**{"prob_default": lambda d: (100*d["prob_default"]).round(1)})
             .rename(columns={"prob_default":"Pred default (%)"}),
             use_container_width=True
         )
