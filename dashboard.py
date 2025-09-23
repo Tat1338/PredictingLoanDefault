@@ -191,12 +191,18 @@ with st.sidebar:
 if page == "Introduction":
     big_title("Loan Default Dashboard")
 
-    # Center hero image under the title
     hero_img = load_hero_image()
     if hero_img is not None:
         left, mid, right = st.columns([1, 2, 1])
         with mid:
             st.image(hero_img, use_column_width=True)
+            st.caption(
+                "Hero image: licensed from Vecteezy (no attribution required). "
+                "[Business investment & risk concept – Vecteezy](https://www.vecteezy.com/photo/36362696-business-man-standing-on-wooden-block-on-natural-green-background-business-investment-and-risk-management-concept-financial-risk-assessment)"
+            )
+    else:
+        st.caption("Add a banner image at `assets/credit_risk_hero.(jpg/png)` to show it here.")
+
     else:
         st.caption("Add a banner image at `assets/credit_risk_hero.(jpg/png)` to show it here.")
 
@@ -237,13 +243,14 @@ Use this as a guide alongside policy and judgement.
     c3.metric("Missing Monthly Income", f"{mi_missing:,}" if "MonthlyIncome" in df_full.columns else "—")
     c4.metric("Age span", f"{age_min}–{age_max}" if age_min is not None else "—")
 
-    section_title("Data & methods")
-    st.markdown("""
-**Target:** 1 = serious delinquency within two years; 0 = otherwise.  
-**Prep:** cast numerics, drop invalid ages (≤ 0), median-impute gaps, standardize features for modeling.  
-**Model:** logistic regression with class-weighting on a hold-out split; we show ROC, PR, calibration, Brier, KS, and gains.  
-**Use:** scores guide decisions; they do not replace policy or manual review.
-""")
+section_title("Credits")
+st.markdown(
+    "- **Dataset:** Give Me Some Credit (Kaggle) — used for education and analysis.  \n"
+    "  Source: [Kaggle competition](https://www.kaggle.com/competitions/GiveMeSomeCredit)\n"
+    "- **Hero image:** Vecteezy Pro license (no attribution required).  \n"
+    "  [Image link](https://www.vecteezy.com/photo/36362696-business-man-standing-on-wooden-block-on-natural-green-background-business-investment-and-risk-management-concept-financial-risk-assessment)"
+)
+
 
 # ---------------- 2) Feature Distributions ----------------
 elif page == "Feature Distributions":
