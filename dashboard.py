@@ -945,10 +945,19 @@ elif page == "Data Quality":
 elif page == "Summary & Conclusion":
     big_title("Summary & Conclusion")
     st.markdown(
-        "Borrowers most likely to default tend to combine **very high card/line utilization**, "
-        "**any past-due history**, **high debt ratio**, **lower income**, **younger age**, "
-        "**many open lines/loans**, and **3+ dependents**."
-    )
+        st.markdown("""
+    **Summary & Conclusion**
+
+    Looking across the whole study, default risk in this dataset isn’t about a single dramatic variable; it’s the stack of medium-size pressures that add up. The clearest pattern is capacity strain. Borrowers with **very high revolving utilization** and a **heavy debt ratio** sit in the thick end of long right-tailed distributions, and those tails are where risk concentrates. A second, simple but strong divider is **any past-due history**: the delinquency counts are zero-inflated, and the moment they flip from 0 to ≥1, risk steps up sharply. These signals often travel with **lower reported income**, **younger age bands**, and **more open credit lines**. Risk also ticks up from **two to three (or more) dependents**, which likely reflects tighter monthly budgets rather than something inherently “risky” about family size. Correlation heatmaps and partial plots tell a similar story: utilization and debt ratio rise together, and their effect on risk is non-linear rather than smooth.
+
+    Model results were consistent with what the charts suggested. **Logistic regression** gave a clean, transparent baseline with sensible odds shifts that matched domain intuition (utilization ↑ → odds of default ↑). **Random forest** captured the non-linearities and interactions the linear model can’t, and ranked cases better in the high-risk bands, which is exactly where decisions matter most. After **calibration**, scores behaved like real probabilities rather than over-confident scores; reliability curves flattened and the predicted risk aligned more closely with observed outcomes. Threshold sweeps made the trade-off explicit: if you lower the cut-off, you **catch more true defaults** (higher recall) but **flag more non-defaulters** (lower precision); raising it does the opposite. There isn’t a single “right” threshold—there’s an operating point that matches a lender’s tolerance for missed defaults versus false alarms.
+
+    Practically, the takeaway is straightforward. People who keep balances modest relative to their limits, avoid recent late payments, and don’t accumulate many concurrent credit lines are far less represented in the top-risk slices. The features the models leaned on—**utilization, recent delinquencies, and debt ratio**—are also levers a borrower can actually influence over time. For deployment, I would keep the logistic model as a readable benchmark, use the calibrated random forest for day-to-day scoring, and **monitor** a few things monthly: (1) the distribution of utilization and debt ratio (drift risk), (2) the calibration curve (does probability still match reality?), and (3) the approval rate at the chosen threshold. Limitations remain: this is a static snapshot without a true out-of-time split, and several variables (notably income) carry missingness that may reflect reporting rather than behavior. So the results should be treated as **directional guidance** rather than hard policy. Even so, the patterns are stable across methods: default risk clusters where repayment capacity is stretched and recent behavior has slipped, and it recedes when balances and history are kept clean.
+
+    ---
+
+    **In everyday terms:** People get into trouble when balances sit near their limits, late payments start to appear, and a large chunk of income is already tied up in debt. Those pressures often come together, especially for younger borrowers or households with three or more dependents. Keeping balances modest and payments current reduces risk the most. Our model doesn’t hand down a verdict; it gives a probability so policy makers can choose how cautious to be. If we lower the cut-off, we catch more likely defaults but review more good cases; if we raise it, we approve more people but may miss some risk.
+    """)
 
     if "__y_proba__" not in st.session_state:
         y_all = df_full["SeriousDlqin2yrs"].astype(int)
