@@ -191,6 +191,7 @@ with st.sidebar:
 if page == "Introduction":
     big_title("Loan Default Dashboard")
 
+    # Center hero image + caption (only if the file exists)
     hero_img = load_hero_image()
     if hero_img is not None:
         left, mid, right = st.columns([1, 2, 1])
@@ -200,9 +201,6 @@ if page == "Introduction":
                 "Hero image: licensed from Vecteezy (no attribution required). "
                 "[Business investment & risk concept – Vecteezy](https://www.vecteezy.com/photo/36362696-business-man-standing-on-wooden-block-on-natural-green-background-business-investment-and-risk-management-concept-financial-risk-assessment)"
             )
-    else:
-        st.caption("Add a banner image at `assets/credit_risk_hero.(jpg/png)` to show it here.")
-
     else:
         st.caption("Add a banner image at `assets/credit_risk_hero.(jpg/png)` to show it here.")
 
@@ -232,7 +230,7 @@ Use this as a guide alongside policy and judgement.
     )
 
     section_title("Snapshot")
-    c1,c2,c3,c4 = st.columns(4)
+    c1, c2, c3, c4 = st.columns(4)
     rows = len(df_full)
     dr = df_full["SeriousDlqin2yrs"].mean() if rows else 0.0
     mi_missing = df_full["MonthlyIncome"].isna().sum() if "MonthlyIncome" in df_full.columns else 0
@@ -243,13 +241,21 @@ Use this as a guide alongside policy and judgement.
     c3.metric("Missing Monthly Income", f"{mi_missing:,}" if "MonthlyIncome" in df_full.columns else "—")
     c4.metric("Age span", f"{age_min}–{age_max}" if age_min is not None else "—")
 
-section_title("Credits")
-st.markdown(
-    "- **Dataset:** Give Me Some Credit (Kaggle) — used for education and analysis.  \n"
-    "  Source: [Kaggle competition](https://www.kaggle.com/competitions/GiveMeSomeCredit)\n"
-    "- **Hero image:** Vecteezy Pro license (no attribution required).  \n"
-    "  [Image link](https://www.vecteezy.com/photo/36362696-business-man-standing-on-wooden-block-on-natural-green-background-business-investment-and-risk-management-concept-financial-risk-assessment)"
-)
+    section_title("Data & methods")
+    st.markdown("""
+**Target:** 1 = serious delinquency within two years; 0 = otherwise.  
+**Prep:** cast numerics, drop invalid ages (≤ 0), median-impute gaps, standardize features for modeling.  
+**Model:** logistic regression with class-weighting on a hold-out split; we show ROC, PR, calibration, Brier, KS, and gains.  
+**Use:** scores guide decisions; they do not replace policy or manual review.
+""")
+
+    section_title("Credits")
+    st.markdown(
+        "- **Dataset:** Give Me Some Credit (Kaggle) — used for education and analysis.  \n"
+        "  Source: [Kaggle competition](https://www.kaggle.com/competitions/GiveMeSomeCredit)\n"
+        "- **Hero image:** Vecteezy Pro license (no attribution required).  \n"
+        "  [Image link](https://www.vecteezy.com/photo/36362696-business-man-standing-on-wooden-block-on-natural-green-background-business-investment-and-risk-management-concept-financial-risk-assessment)"
+    )
 
 
 # ---------------- 2) Feature Distributions ----------------
