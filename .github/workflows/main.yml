@@ -20,43 +20,79 @@ jobs:
           WORKDIR="$(mktemp -d)"
           cd "$WORKDIR"
 
-          # Hit the app and save cookies
-          curl -A "keepalive-bot/1.1" -c cookies.txt -b cookies.txt \
-               --location --silent --show-error --fail --max-time 45 \
-               "${APP_URL}?t=$(date +%s)" -o page.html
+          fetch_page () {
+            curl -A "keepalive-bot/1.2" -c cookies.txt -b cookies.txt \
+                 -H "Accept: text/html" \
+                 --location --silent --show-error --fail --max-time 45 \
+                 "$1" -o "$2"
+          }
 
-          # If the sleep page shows "Zzzz", try to press the wake button
-          if grep -qi "Zzzz" page.html; then
-            echo "App is sleeping. Attempting to wake…"
+          is_sleep_page () {
+            # Match multiple phrases that appear on Streamlit's sleep screen
+            grep -Eiq "Zzzz|has gone to sleep|get this app back up" "$1"
+          }
 
-            ACTION_PATH=$(grep -oiE 'action="[^"]+"' page.html | head -n1 | sed -E 's/action="([^"]+)"/\1/')
+          echo "GET 1…"
+          fetch_page "${APP_URL}?t=$(date +%s)" page1.html || true
+
+          if is_sleep_page page1.html; then
+            echo "::notice::Detected sleep page — trying wake attempts."
+
+            # 1) Try POST to root (some deployments wake on POST /)
+            echo "Wake attempt A: POST /"
+            curl -A "keepalive-bot/1.2" -c cookies.txt -b cookies.txt \
+                 --location --silent --show-error --max-time 45 \
+                 -X POST "${APP_URL}" -o wakeA.html || true
+
+            sleep 6
+            echo "GET 2…"
+            fetch_page "${APP_URL}?awakeA=$(date +%s)" page2.html || true
+            if ! is_sleep_page page2.html; then
+              echo "Wake successful (A)."
+              exit 0
+            fi
+
+            # 2) Look for form action on the page and POST to it
+            echo "Wake attempt B: parse form action"
+            ACTION_PATH=$(grep -oiE 'action="[^"]+"' page1.html | head -n1 | sed -E 's/action="([^"]+)"/\1/')
             if [[ -n "${ACTION_PATH:-}" ]]; then
               if [[ "$ACTION_PATH" == /* ]]; then
                 WAKE_URL="${APP_URL%/}$ACTION_PATH"
               else
                 WAKE_URL="$ACTION_PATH"
               fi
-              echo "Wake URL: $WAKE_URL"
-
-              curl -A "keepalive-bot/1.1" -c cookies.txt -b cookies.txt \
-                   --location --silent --show-error --fail --max-time 45 \
-                   -X POST "$WAKE_URL" -o wake.html || true
+              echo "Parsed wake URL: $WAKE_URL"
+              curl -A "keepalive-bot/1.2" -c cookies.txt -b cookies.txt \
+                   --location --silent --show-error --max-time 45 \
+                   -X POST "$WAKE_URL" -o wakeB.html || true
             else
-              echo "Could not find wake form action; will retry root."
+              echo "No form action found."
             fi
 
-            sleep 8
-            curl -A "keepalive-bot/1.1" -c cookies.txt -b cookies.txt \
-                 --location --silent --show-error --fail --max-time 45 \
-                 "${APP_URL}?awake=$(date +%s)" -o page2.html
-
-            if grep -qi "Zzzz" page2.html; then
-              echo "Still sleeping after wake attempt."
-              exit 1
-            else
-              echo "Wake successful."
+            sleep 6
+            echo "GET 3…"
+            fetch_page "${APP_URL}?awakeB=$(date +%s)" page3.html || true
+            if ! is_sleep_page page3.html; then
+              echo "Wake successful (B)."
               exit 0
             fi
+
+            # 3) Fallback: POST with a common wake query flag
+            echo "Wake attempt C: POST with query flag"
+            curl -A "keepalive-bot/1.2" -c cookies.txt -b cookies.txt \
+                 --location --silent --show-error --max-time 45 \
+                 -X POST "${APP_URL}?wake=1" -o wakeC.html || true
+
+            sleep 6
+            echo "GET 4…"
+            fetch_page "${APP_URL}?awakeC=$(date +%s)" page4.html || true
+            if ! is_sleep_page page4.html; then
+              echo "Wake successful (C)."
+              exit 0
+            fi
+
+            echo "::warning::Still sleeping after wake attempts."
+            exit 1
           else
             echo "App is already awake."
             exit 0
