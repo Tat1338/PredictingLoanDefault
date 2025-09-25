@@ -2,29 +2,62 @@ name: Keep Streamlit Awake
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # every 15 minutes
+    - cron: "*/10 * * * *"   # every 10 minutes (UTC)
   workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
     steps:
-      - name: Ping Streamlit health endpoint
+      - name: Wake Streamlit app if sleeping, else just ping
         shell: bash
         run: |
           set -euo pipefail
-          URL="https://predictingloandefault.streamlit.app/_stcore/health"
-          for i in {1..3}; do
-            CODE=$(curl -fsS -o /dev/null -w "%{http_code}" \
-              -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
-              "$URL" || true)
-            echo "HTTP $CODE"
-            if [ -n "$CODE" ] && [ "$CODE" -ge 200 ] && [ "$CODE" -lt 400 ]; then
+
+          APP_URL="https://predictingloandefault.streamlit.app/"
+          echo "Target: $APP_URL"
+
+          WORKDIR="$(mktemp -d)"
+          cd "$WORKDIR"
+
+          # Hit the app and save cookies
+          curl -A "keepalive-bot/1.1" -c cookies.txt -b cookies.txt \
+               --location --silent --show-error --fail --max-time 45 \
+               "${APP_URL}?t=$(date +%s)" -o page.html
+
+          # If the sleep page shows "Zzzz", try to press the wake button
+          if grep -qi "Zzzz" page.html; then
+            echo "App is sleeping. Attempting to wake…"
+
+            ACTION_PATH=$(grep -oiE 'action="[^"]+"' page.html | head -n1 | sed -E 's/action="([^"]+)"/\1/')
+            if [[ -n "${ACTION_PATH:-}" ]]; then
+              if [[ "$ACTION_PATH" == /* ]]; then
+                WAKE_URL="${APP_URL%/}$ACTION_PATH"
+              else
+                WAKE_URL="$ACTION_PATH"
+              fi
+              echo "Wake URL: $WAKE_URL"
+
+              curl -A "keepalive-bot/1.1" -c cookies.txt -b cookies.txt \
+                   --location --silent --show-error --fail --max-time 45 \
+                   -X POST "$WAKE_URL" -o wake.html || true
+            else
+              echo "Could not find wake form action; will retry root."
+            fi
+
+            sleep 8
+            curl -A "keepalive-bot/1.1" -c cookies.txt -b cookies.txt \
+                 --location --silent --show-error --fail --max-time 45 \
+                 "${APP_URL}?awake=$(date +%s)" -o page2.html
+
+            if grep -qi "Zzzz" page2.html; then
+              echo "Still sleeping after wake attempt."
+              exit 1
+            else
+              echo "Wake successful."
               exit 0
             fi
-            echo "Try $i failed; retrying in 5s…"
-            sleep 5
-          done
-          echo "All tries failed"; exit 1
-
+          else
+            echo "App is already awake."
+            exit 0
+          fi
