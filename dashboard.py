@@ -730,7 +730,7 @@ elif page == "Client Credit Check":
     big_title("Client Credit Check — Enter borrower details")
     st.caption("Fill in the boxes below to get a GO / CAUTION / STOP verdict and a risk gauge.")
 
-    # Ensure a model exists (reuse from Modeling page or build quick)
+
     if "__model_cols__" not in st.session_state:
         y_all = df_full["SeriousDlqin2yrs"].astype(int)
         X_cols_all = [c for c in df_full.columns if c != "SeriousDlqin2yrs" and pd.api.types.is_numeric_dtype(df_full[c])]
@@ -958,14 +958,18 @@ elif page == "Data Quality":
 elif page == "Summary & Conclusion":
     big_title("Summary & Conclusion")
 
-    # Single, fuller conclusion (replaces the old one-liner)
-    st.markdown("""
-Default risk in this dataset doesn’t hinge on one dramatic variable; it rises when several ordinary pressures stack up. The clearest pattern is **capacity strain**: very high **card/line utilization** and a heavy **debt ratio** live in long right-tails, and those tails are where defaults concentrate. A clean/no-late history acts like a gate—once **any past-due** appears (30–59, 60–89, or 90+ days), the risk steps up sharply. These signals often arrive together with **lower reported income**, **younger age bands**, **many open credit lines/loans**, and **three or more dependents**, which likely reflects tighter monthly budgets rather than something inherently risky about family size. The correlation and bin charts tell the same story: utilization and debt ratio move together, and their relationship with default is **non-linear**—risk climbs slowly at first and faster once balances crowd the limits.
 
-The model behaves consistently with the visuals. A simple **logistic regression** gives a sensible baseline; a **random-forest** version catches the non-linear bits and ranks the top-risk slice better. After **calibration**, scores behave like probabilities, which makes the **A–D buckets** and the **threshold slider** useful knobs rather than black-box output. In practical terms: clients who keep balances well below limits, stay current on payments, and avoid stacking new credit lines rarely show up in the high-risk bands; risk clusters where capacity is tight and recent repayments have slipped. Treat these results as **directional** (static snapshot, imperfect income reporting), but they are stable across methods and segments and line up with common credit practice.
+    st.markdown("""
+Default risk in this dataset doesn’t hinge on one dramatic variable; it rises when several ordinary pressures stack up. The clearest pattern is capacity strain: very high card/line utilization and a heavy debt ratio live in long right-tails, and those tails are where defaults concentrate. A clean/no-late history acts like a gate—once any past-due appears (30–59, 60–89, or 90+ days), the risk steps up sharply.
+
+These signals often arrive together with lower reported income, younger age bands, many open credit lines/loans, and three or more dependents, which likely reflects tighter monthly budgets rather than something inherently risky about family size. The youngest clients (18–34) stand out: even with fewer loans or dependents, their late-payment rates are higher than middle-aged borrowers, suggesting a combination of lower financial buffers and less credit experience.
+
+The correlation and bin charts tell the same story: utilization and debt ratio move together, and their relationship with default is non-linear—risk climbs slowly at first and faster once balances crowd the limits. The model results are consistent with these visuals. A simple logistic regression provides a sensible baseline; a random forest catches the non-linear effects and ranks the top-risk slice better. After calibration, scores behave like probabilities, making the A–D buckets and threshold slider useful knobs rather than black-box output.
+
+In practical terms: clients who keep balances well below limits, stay current on payments, and avoid stacking new credit lines rarely show up in the high-risk bands; risk clusters where capacity is tight and recent repayments have slipped. These results should be treated as directional (static snapshot, imperfect income reporting), but they are stable across methods and segments and align with common credit-risk practice.
 """)
 
-    # Ensure we have scores available for the summary tables
+    # Scores available for the summary tables
     if "__y_proba__" not in st.session_state:
         y_all = df_full["SeriousDlqin2yrs"].astype(int)
         X_cols_all = [c for c in df_full.columns if c != "SeriousDlqin2yrs" and pd.api.types.is_numeric_dtype(df_full[c])]
@@ -978,7 +982,7 @@ The model behaves consistently with the visuals. A simple **logistic regression*
         st.session_state["__y_test__"] = yte.tolist()
         st.session_state["__y_proba__"] = y_pr.tolist()
 
-    # Build scored frame with some extras for display
+    # Scores with extra displays
     idx = st.session_state["__X_test_index__"]
     y_test = st.session_state["__y_test__"]
     y_proba = st.session_state["__y_proba__"]
