@@ -655,6 +655,36 @@ elif page == "Modeling & Metrics":
 elif page == "Risk Buckets (A–D)":
     big_title("Risk Buckets (A–D) & Likely Defaulters")
 
+    # --- Help panel: what the sliders do (appears under the title) ---
+    with st.expander("ℹ️ What the sliders do (read me first)", expanded=True):
+        st.markdown("""
+    **Every borrower gets a risk score from 0 to 1** (think **0%–100%** chance of default).
+
+    **The three sliders draw three vertical lines** on that 0–1 scale.  
+    These lines split everyone into **four risk buckets**:
+
+    - **A = Low risk** — scores **below the first line**
+    - **B = Medium-low** — scores **between the first and second line**
+    - **C = Medium-high** — scores **between the second and third line**
+    - **D = Highest risk** — scores **at or above the third line**
+
+    **What 0.25 and 0.50 mean (defaults)**
+    - **0.25** = **25% predicted risk** → scores **below 0.25** go to **A (low risk)**.
+    - **0.50** = **50% predicted risk** → scores **0.50 or higher** go to **D (highest risk)**.
+
+    **Why move the sliders?**
+    - **Lower the D line (C/D)** → more people fall into **D** (you review more cases and catch more risk).
+    - **Raise the D line** → fewer people in **D** (you review fewer cases but focus on only the very highest risk).
+
+    The **table and chart update instantly** to show how many people are in each bucket and their **average risk**.
+
+    **Quick examples** (with A/B=0.25, B/C=0.34, C/D=0.50):
+    - Score **0.18** → **A**
+    - Score **0.31** → **B**
+    - Score **0.46** → **C** *(if you move C/D down to **0.45**, it becomes **D**)*
+    - Score **0.72** → **D**
+    """)
+
     if "__y_proba__" not in st.session_state:
         y_all = df_full["SeriousDlqin2yrs"].astype(int)
         X_cols_all = [c for c in df_full.columns if c != "SeriousDlqin2yrs" and pd.api.types.is_numeric_dtype(df_full[c])]
